@@ -6,7 +6,7 @@ import 'dart:convert';
 import 'dart:io' show Platform;
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:permission_handler/permission_handler.dart';
-
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'main.dart';
 import 'deliveries_screen.dart';
 
@@ -127,27 +127,39 @@ class _ScannerScreenState extends State<ScannerScreen> {
       print("Número de telefone inválido ou não fornecido");
       return;
     }
+
     const mensagem = "Vrummm! 🛵\nO seu pedido acabou de sair para entrega! - Mensagem Automática";
+
     final phone = phoneNumber.replaceAll(RegExp(r'\D'), '');
     if (phone.isEmpty) {
       print("Número de telefone inválido após formatação");
       return;
     }
-    const url = "https://api.wzap.chat/v1/messages";
+
+    final messageApiUrl = dotenv.env['MESSAGE_API_URL'] ?? '';
+    final messageApiKey = dotenv.env['MESSAGE_API_KEY'] ?? '';
+    if (messageApiUrl.isEmpty || messageApiKey.isEmpty) {
+      print("Erro: Variáveis de ambiente MESSAGE_API_URL ou MESSAGE_API_KEY não definidas");
+      return;
+    }
+
     final payload = {
-      "phone": phone,
-      "message": mensagem
+      "number": phone,
+      "text": mensagem,
     };
+
     final headers = {
       "Content-Type": "application/json",
-      "Token": "7343607cd11509da88407ea89353ebdd8a79bdf9c3152da4025274c08c370b7b90ab0b68307d28cf"
+      "apikey": messageApiKey,
     };
+
     try {
       final response = await http.post(
-        Uri.parse(url),
+        Uri.parse(messageApiUrl),
         headers: headers,
         body: jsonEncode(payload),
       );
+
       print("Mensagem 'Saiu pra Entrega' enviada: ${response.body}");
     } catch (error) {
       print("Erro ao enviar mensagem 'Saiu pra Entrega': $error");
@@ -155,124 +167,143 @@ class _ScannerScreenState extends State<ScannerScreen> {
   }
 
   Future<void> _processQRCode(String id) async {
-  if (_cachedEntregador == null || _cachedEntregador!.isEmpty) {
-    if (!mounted) return;
-    setState(() {
-      _resultMessage = 'Erro: Nome do entregador não definido. Faça login novamente.';
-    });
-    return;
+    if (_cachedEntregador == null || _cachedEntregador!.isEmpty) {
+      if (!mounted) return;
+      setState(() {
+        _resultMessage = 'Erro: Nome do entregador não definido. Faça login novamente.';
+      });
+      return;
+    }
+
+    try {
+      String normalizedEntregador = _cachedEntregador!.trim();
+      const List<String> upperCaseNames = [''];
+      if (upperCaseNames.contains(normalizedEntregador.toLowerCase())) {
+        normalizedEntregador = normalizedEntregador.toUpperCase();
+      } else {
+        normalizedEntregador = normalizedEntregador
+            .split(' ')
+            .map((word) => word[0].toUpperCase() + word.substring(1).toLowerCase())
+            .join(' ');
+      }
+
+      // Verificar duplicatas
+      final baseUrl = dotenv.env['API_BASE_URL'] ?? '';
+      final checkDuplicateEndpoint = dotenv.env['CHECK_DUPLICATE_ENDPOINT'] ?? '';
+      if (baseUrl.isEmpty || checkDuplicateEndpoint.isEmpty) {
+        if (!mounted) return;
+        setState(() {
+          _resultMessage = 'Erro: Configuração de API ausente.';
+        });
+        print('Erro: Variáveis de ambiente API_BASE_URL ou CHECK_DUPLICATE_ENDPOINT não definidas');
+        return;
+      }
+      final duplicateResponse = await http.get(
+        Uri.parse('$baseUrl$checkDuplicateEndpoint&id_pedido=$id'),
+      ).timeout(const Duration(seconds: 10));
+      if (duplicateResponse.body.isEmpty) {
+        if (!mounted) return;
+        setState(() {
+          _resultMessage = 'Erro: Resposta vazia ao verificar duplicatas.';
+        });
+        return;
+      }
+      final duplicateData = jsonDecode(duplicateResponse.body);
+
+      if (duplicateData['status'] == 'success' && duplicateData['is_duplicate']) {
+        if (!mounted) return;
+        setState(() {
+          _resultMessage = duplicateData['message'] ?? 'Este pedido já foi escaneado!';
+        });
+        return;
+      }
+
+      // Enviar dados para a API
+      final assignAndSaveDeliveryEndpoint = dotenv.env['ASSIGN_AND_SAVE_DELIVERY_ENDPOINT'] ?? '';
+      if (assignAndSaveDeliveryEndpoint.isEmpty) {
+        if (!mounted) return;
+        setState(() {
+          _resultMessage = 'Erro: Configuração de API ausente.';
+        });
+        print('Erro: Variável de ambiente ASSIGN_AND_SAVE_DELIVERY_ENDPOINT não definida');
+        return;
+      }
+      final body = {
+        'id_pedido': id,
+        'nome_entregador': normalizedEntregador,
+        'timestamp': DateTime.now().toIso8601String(),
+        'bairro': 'N/A',
+        'rua': 'N/A',
+        'telefone': 'N/A',
+        'nome': 'N/A',
+        'pagamento': 'N/A',
+        'numero': 'N/A',
+        'cidade': 'N/A',
+      };
+      final response = await http.post(
+        Uri.parse('$baseUrl$assignAndSaveDeliveryEndpoint'),
+        headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+        body: body,
+      ).timeout(const Duration(seconds: 10));
+
+      print('Resposta bruta da API assign_and_save_delivery: ${response.body}');
+      if (response.body.isEmpty) {
+        if (!mounted) return;
+        setState(() {
+          _resultMessage = 'Erro: Resposta vazia da API ao atribuir entrega.';
+        });
+        return;
+      }
+
+      final data = jsonDecode(response.body);
+
+      if (data['status'] == 'success') {
+        // Enviar mensagem de "Saiu pra Entrega"
+        await enviarMensagemSaiuPraEntrega(data['telefone']);
+
+        if (!mounted) return;
+        setState(() {
+          final messages = [
+            'Feito! Agora é só meter marcha, $normalizedEntregador 🚀',
+            'Você faz a diferença, $normalizedEntregador. Bora levar o pedido #$id até o cliente!',
+            'Boaaa, $normalizedEntregador! Agora é só partir pro abraço... digo, pra entrega!',
+            'Pedido #$id é seu, $normalizedEntregador. Agora corre que o churrasco tá esperando!'
+          ];
+          _resultMessage = messages[DateTime.now().millisecond % messages.length];
+        });
+        await Future.delayed(const Duration(seconds: 2)); // Aumentado para dar tempo de exibir a mensagem
+        if (!mounted) return;
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(builder: (context) => const DeliveriesScreen()),
+        );
+      } else {
+        if (!mounted) return;
+        setState(() {
+          _resultMessage = data['message'] ?? 'Erro ao atribuir e salvar o pedido.';
+        });
+      }
+    } catch (e) {
+      print('Erro ao processar QR Code: $e');
+      if (e is TimeoutException) {
+        if (!mounted) return;
+        setState(() {
+          _resultMessage = 'Conexão lenta, mas a entrega foi registrada! Verifique a planilha.';
+        });
+        await Future.delayed(const Duration(seconds: 2));
+        if (!mounted) return;
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(builder: (context) => const DeliveriesScreen()),
+        );
+      } else {
+        if (!mounted) return;
+        setState(() {
+          _resultMessage = 'Erro inesperado: $e';
+        });
+      }
+    }
   }
-
-  try {
-    String normalizedEntregador = _cachedEntregador!.trim();
-    const List<String> upperCaseNames = [''];
-    if (upperCaseNames.contains(normalizedEntregador.toLowerCase())) {
-      normalizedEntregador = normalizedEntregador.toUpperCase();
-    } else {
-      normalizedEntregador = normalizedEntregador
-          .split(' ')
-          .map((word) => word[0].toUpperCase() + word.substring(1).toLowerCase())
-          .join(' ');
-    }
-
-    // Verificar duplicatas
-    final duplicateResponse = await http.get(
-      Uri.parse('https://aogosto.store/entregador/api.php?action=check_duplicate&id_pedido=$id'),
-    ).timeout(const Duration(seconds: 10));
-    if (duplicateResponse.body.isEmpty) {
-      if (!mounted) return;
-      setState(() {
-        _resultMessage = 'Erro: Resposta vazia ao verificar duplicatas.';
-      });
-      return;
-    }
-    final duplicateData = jsonDecode(duplicateResponse.body);
-
-    if (duplicateData['status'] == 'success' && duplicateData['is_duplicate']) {
-      if (!mounted) return;
-      setState(() {
-        _resultMessage = duplicateData['message'] ?? 'Este pedido já foi escaneado!';
-      });
-      return;
-    }
-
-    // Enviar dados para a API
-    final body = {
-      'id_pedido': id,
-      'nome_entregador': normalizedEntregador,
-      'timestamp': DateTime.now().toIso8601String(),
-      'bairro': 'N/A',
-      'rua': 'N/A',
-      'telefone': 'N/A',
-      'nome': 'N/A',
-      'pagamento': 'N/A',
-      'numero': 'N/A',
-      'cidade': 'N/A',
-    };
-    final response = await http.post(
-      Uri.parse('https://aogosto.store/entregador/api.php?action=assign_and_save_delivery'),
-      headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-      body: body,
-    ).timeout(const Duration(seconds: 10));
-
-    print('Resposta bruta da API assign_and_save_delivery: ${response.body}');
-    if (response.body.isEmpty) {
-      if (!mounted) return;
-      setState(() {
-        _resultMessage = 'Erro: Resposta vazia da API ao atribuir entrega.';
-      });
-      return;
-    }
-
-    final data = jsonDecode(response.body);
-
-    if (data['status'] == 'success') {
-      // Enviar mensagem de "Saiu pra Entrega"
-      await enviarMensagemSaiuPraEntrega(data['telefone']);
-
-      if (!mounted) return;
-      setState(() {
-        final messages = [
-          'Feito! Agora é só meter marcha, $normalizedEntregador 🚀',
-          'Você faz a diferença, $normalizedEntregador. Bora levar o pedido #$id até o cliente!',
-          'Boaaa, $normalizedEntregador! Agora é só partir pro abraço... digo, pra entrega!',
-          'Pedido #$id é seu, $normalizedEntregador. Agora corre que o churrasco tá esperando!'
-        ];
-        _resultMessage = messages[DateTime.now().millisecond % messages.length];
-      });
-      await Future.delayed(const Duration(seconds: 2)); // Aumentado para dar tempo de exibir a mensagem
-      if (!mounted) return;
-      Navigator.pushReplacement(
-        context,
-        MaterialPageRoute(builder: (context) => const DeliveriesScreen()),
-      );
-    } else {
-      if (!mounted) return;
-      setState(() {
-        _resultMessage = data['message'] ?? 'Erro ao atribuir e salvar o pedido.';
-      });
-    }
-  } catch (e) {
-    print('Erro ao processar QR Code: $e');
-    if (e is TimeoutException) {
-      if (!mounted) return;
-      setState(() {
-        _resultMessage = 'Conexão lenta, mas a entrega foi registrada! Verifique a planilha.';
-      });
-      await Future.delayed(const Duration(seconds: 2));
-      if (!mounted) return;
-      Navigator.pushReplacement(
-        context,
-        MaterialPageRoute(builder: (context) => const DeliveriesScreen()),
-      );
-    } else {
-      if (!mounted) return;
-      setState(() {
-        _resultMessage = 'Erro inesperado: $e';
-      });
-    }
-  }
-}
 
   @override
   void dispose() {

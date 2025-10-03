@@ -6,7 +6,7 @@ import 'dart:io' show File, FileMode;
 import 'package:intl/intl.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:image_picker/image_picker.dart';
-
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'main.dart';
 import 'login_screen.dart';
 import 'scanner_screen.dart';
@@ -15,7 +15,6 @@ import 'dart:io';
 
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
-
   @override
   DashboardScreenState createState() => DashboardScreenState();
 }
@@ -60,12 +59,17 @@ class DashboardScreenState extends State<DashboardScreen> with SingleTickerProvi
         await _writeLog('Arquivo de log não existe');
         return;
       }
-      final uri = Uri.parse('https://aogosto.store/entregador/entregador.log');
+      final baseUrl = dotenv.env['API_BASE_URL'] ?? '';
+      final logUploadEndpoint = dotenv.env['LOG_UPLOAD_ENDPOINT'] ?? '';
+      if (baseUrl.isEmpty || logUploadEndpoint.isEmpty) {
+        await _writeLog('Erro: Variáveis de ambiente API_BASE_URL ou LOG_UPLOAD_ENDPOINT não definidas');
+        return;
+      }
+      final uri = Uri.parse('$baseUrl$logUploadEndpoint');
       final request = http.MultipartRequest('POST', uri);
       request.files.add(
         await http.MultipartFile.fromPath('log_file', file.path),
       );
-
       final response = await request.send().timeout(const Duration(seconds: 10));
       await _writeLog('Status do upload do log: ${response.statusCode}');
       if (response.statusCode == 200) {
@@ -119,15 +123,23 @@ class DashboardScreenState extends State<DashboardScreen> with SingleTickerProvi
       final entregador = prefs.getString('entregador') ?? '';
       final formattedDate = DateFormat('yyyy-MM-dd').format(DateTime.now());
       await _writeLog('Buscando entregas para entregador: $entregador, data: $formattedDate');
-
+      final baseUrl = dotenv.env['API_BASE_URL'] ?? '';
+      final deliveriesEndpoint = dotenv.env['DELIVERIES_ENDPOINT'] ?? '';
+      final completedDeliveriesEndpoint = dotenv.env['COMPLETED_DELIVERIES_ENDPOINT'] ?? '';
+      if (baseUrl.isEmpty || deliveriesEndpoint.isEmpty || completedDeliveriesEndpoint.isEmpty) {
+        await _writeLog('Erro: Variáveis de ambiente API_BASE_URL, DELIVERIES_ENDPOINT ou COMPLETED_DELIVERIES_ENDPOINT não definidas');
+        return {
+          'completed': 0,
+          'pending': 0,
+          'total': 0,
+        };
+      }
       final pendingResponse = await http.get(
-        Uri.parse('https://aogosto.store/entregador/api.php?action=get_deliveries_by_entregador&entregador=${Uri.encodeComponent(entregador)}&date=$formattedDate'),
+        Uri.parse('$baseUrl$deliveriesEndpoint&entregador=${Uri.encodeComponent(entregador)}&date=$formattedDate'),
       ).timeout(const Duration(seconds: 10));
-
       await _writeLog('Status da resposta de entregas pendentes: ${pendingResponse.statusCode}');
       int pendingCount = 0;
       int completedCount = 0;
-
       if (pendingResponse.statusCode == 200) {
         final pendingData = jsonDecode(pendingResponse.body);
         await _writeLog('Dados de entregas pendentes: $pendingData');
@@ -135,11 +147,9 @@ class DashboardScreenState extends State<DashboardScreen> with SingleTickerProvi
           pendingCount = List<Map<String, dynamic>>.from(pendingData['deliveries']).length;
         }
       }
-
       final completedResponse = await http.get(
-        Uri.parse('https://aogosto.store/entregador/api.php?action=get_completed_deliveries&entregador=${Uri.encodeComponent(entregador)}&date=$formattedDate'),
+        Uri.parse('$baseUrl$completedDeliveriesEndpoint&entregador=${Uri.encodeComponent(entregador)}&date=$formattedDate'),
       ).timeout(const Duration(seconds: 10));
-
       await _writeLog('Status da resposta de entregas concluídas: ${completedResponse.statusCode}');
       if (completedResponse.statusCode == 200) {
         final completedData = jsonDecode(completedResponse.body);
@@ -148,7 +158,6 @@ class DashboardScreenState extends State<DashboardScreen> with SingleTickerProvi
           completedCount = List<Map<String, dynamic>>.from(completedData['deliveries']).length;
         }
       }
-
       final result = {
         'completed': completedCount,
         'pending': pendingCount,
@@ -175,31 +184,35 @@ class DashboardScreenState extends State<DashboardScreen> with SingleTickerProvi
       final today = DateFormat('yyyy-MM-dd').format(DateTime.now());
       final yesterday = DateFormat('yyyy-MM-dd').format(DateTime.now().subtract(const Duration(days: 1)));
       await _writeLog('Calculando tempo médio para entregador: $entregador, hoje: $today, ontem: $yesterday');
-
+      final baseUrl = dotenv.env['API_BASE_URL'] ?? '';
+      final completedDeliveriesEndpoint = dotenv.env['COMPLETED_DELIVERIES_ENDPOINT'] ?? '';
+      if (baseUrl.isEmpty || completedDeliveriesEndpoint.isEmpty) {
+        await _writeLog('Erro: Variáveis de ambiente API_BASE_URL ou COMPLETED_DELIVERIES_ENDPOINT não definidas');
+        return {
+          'averageTime': '0 min',
+          'difference': '0 min',
+        };
+      }
       Future<double> calculateAverageForDate(String date) async {
         final response = await http.get(
-          Uri.parse('https://aogosto.store/entregador/api.php?action=get_completed_deliveries&entregador=${Uri.encodeComponent(entregador)}&date=$date'),
+          Uri.parse('$baseUrl$completedDeliveriesEndpoint&entregador=${Uri.encodeComponent(entregador)}&date=$date'),
         ).timeout(const Duration(seconds: 10));
-
         await _writeLog('Status da resposta de entregas concluídas ($date): ${response.statusCode}');
         if (response.statusCode != 200) {
           await _writeLog('Erro: Status code não é 200 para data $date');
           return 0.0;
         }
-
         final data = jsonDecode(response.body);
         await _writeLog('Dados de entregas concluídas ($date): $data');
         if (data['status'] != 'success') {
           await _writeLog('Erro: Status da API não é success para data $date');
           return 0.0;
         }
-
         final deliveries = List<Map<String, dynamic>>.from(data['deliveries']);
         if (deliveries.isEmpty) {
           await _writeLog('Nenhuma entrega encontrada para data $date');
           return 0.0;
         }
-
         double totalMinutes = 0.0;
         for (var delivery in deliveries) {
           final duration = delivery['duracao_minutos']?.toDouble() ?? 0.0;
@@ -209,10 +222,8 @@ class DashboardScreenState extends State<DashboardScreen> with SingleTickerProvi
         await _writeLog('Tempo médio calculado para $date: $average minutos');
         return average;
       }
-
       final todayAverage = await calculateAverageForDate(today);
       final yesterdayAverage = await calculateAverageForDate(yesterday);
-
       String averageTime;
       if (todayAverage >= 60) {
         final hours = (todayAverage ~/ 60).toInt();
@@ -221,7 +232,6 @@ class DashboardScreenState extends State<DashboardScreen> with SingleTickerProvi
       } else {
         averageTime = '${todayAverage.round()} min';
       }
-
       String difference;
       final diffMinutes = todayAverage - yesterdayAverage;
       if (diffMinutes.abs() >= 60) {
@@ -234,7 +244,6 @@ class DashboardScreenState extends State<DashboardScreen> with SingleTickerProvi
       if (diffMinutes == 0) {
         difference = '0 min';
       }
-
       final result = {
         'averageTime': averageTime,
         'difference': difference,
@@ -382,16 +391,26 @@ class DashboardScreenState extends State<DashboardScreen> with SingleTickerProvi
                                   );
                                   return;
                                 }
-
                                 final prefs = await SharedPreferences.getInstance();
                                 final entregador = prefs.getString('entregador') ?? 'Desconhecido';
                                 final timestamp = DateTime.now().toIso8601String();
-                                final uri = Uri.parse('https://aogosto.store/entregador/api.php?action=upload_photo');
+                                final baseUrl = dotenv.env['API_BASE_URL'] ?? '';
+                                final photoUploadEndpoint = dotenv.env['PHOTO_UPLOAD_ENDPOINT'] ?? '';
+                                if (baseUrl.isEmpty || photoUploadEndpoint.isEmpty) {
+                                  await _writeLog('Erro: Variáveis de ambiente API_BASE_URL ou PHOTO_UPLOAD_ENDPOINT não definidas');
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    const SnackBar(
+                                      content: Text('Erro de configuração. Contate o suporte.'),
+                                      duration: Duration(seconds: 2),
+                                    ),
+                                  );
+                                  return;
+                                }
+                                final uri = Uri.parse('$baseUrl$photoUploadEndpoint');
                                 final request = http.MultipartRequest('POST', uri)
                                   ..fields['entregador'] = entregador
                                   ..fields['timestamp'] = timestamp
                                   ..files.add(await http.MultipartFile.fromPath('photo', photo.path));
-
                                 final response = await request.send().timeout(const Duration(seconds: 10));
                                 await _writeLog('Status do upload da foto: ${response.statusCode}');
                                 if (!mounted) return;
@@ -909,14 +928,12 @@ class DashboardScreenState extends State<DashboardScreen> with SingleTickerProvi
 class AnimatedCard extends StatefulWidget {
   final Widget child;
   const AnimatedCard({super.key, required this.child});
-
   @override
   AnimatedCardState createState() => AnimatedCardState();
 }
 
 class AnimatedCardState extends State<AnimatedCard> {
   bool _isElevated = false;
-
   @override
   Widget build(BuildContext context) {
     return GestureDetector(

@@ -6,7 +6,7 @@ plugins {
 
 android {
     namespace = "com.aogosto.temp_project"
-    compileSdk = 35
+    compileSdk = 36
     ndkVersion = "27.0.12077973"
 
     compileOptions {
@@ -25,7 +25,7 @@ android {
 
     defaultConfig {
         applicationId = "com.aogosto.temp_project"
-        minSdk = 21
+        minSdk = flutter.minSdkVersion
         targetSdk = 35
         versionCode = 2
         versionName = "1.2.0"

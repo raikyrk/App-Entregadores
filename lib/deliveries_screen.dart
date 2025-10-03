@@ -9,6 +9,7 @@ import 'package:image_picker/image_picker.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'dart:convert';
 import 'dart:async';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'main.dart';
 import 'dashboard_screen.dart';
 import 'scanner_screen.dart';
@@ -137,8 +138,14 @@ class _DeliveriesScreenState extends State<DeliveriesScreen> with SingleTickerPr
     });
     try {
       final entregador = prefs.getString('entregador') ?? '';
+      final baseUrl = dotenv.env['API_BASE_URL'] ?? '';
+      final deliveriesEndpoint = dotenv.env['DELIVERIES_ENDPOINT'] ?? '';
+      final completedDeliveriesEndpoint = dotenv.env['COMPLETED_DELIVERIES_ENDPOINT'] ?? '';
+      if (baseUrl.isEmpty || deliveriesEndpoint.isEmpty || completedDeliveriesEndpoint.isEmpty) {
+        throw Exception('Erro: Variáveis de ambiente API_BASE_URL, DELIVERIES_ENDPOINT ou COMPLETED_DELIVERIES_ENDPOINT não definidas');
+      }
       final pendingResponse = await http.get(
-        Uri.parse('https://aogosto.store/entregador/api.php?action=get_deliveries_by_entregador&entregador=${Uri.encodeComponent(entregador)}'),
+        Uri.parse('$baseUrl$deliveriesEndpoint&entregador=${Uri.encodeComponent(entregador)}'),
       ).timeout(const Duration(seconds: 10));
       if (pendingResponse.statusCode != 200) {
         throw Exception('Erro ao buscar entregas pendentes: Status ${pendingResponse.statusCode}');
@@ -157,7 +164,7 @@ class _DeliveriesScreenState extends State<DeliveriesScreen> with SingleTickerPr
       for (var date in _selectedDates) {
         final formattedDate = DateFormat('yyyy-MM-dd').format(date);
         final completedResponse = await http.get(
-          Uri.parse('https://aogosto.store/entregador/api.php?action=get_completed_deliveries&entregador=${Uri.encodeComponent(entregador)}&date=$formattedDate'),
+          Uri.parse('$baseUrl$completedDeliveriesEndpoint&entregador=${Uri.encodeComponent(entregador)}&date=$formattedDate'),
         ).timeout(const Duration(seconds: 10));
         if (completedResponse.statusCode != 200) {
           throw Exception('Erro ao buscar entregas concluídas: Status ${completedResponse.statusCode}');
@@ -192,24 +199,35 @@ class _DeliveriesScreenState extends State<DeliveriesScreen> with SingleTickerPr
       developer.log("Número de telefone inválido ou não fornecido");
       return;
     }
+
     const mensagem = "Parece que o seu pedido foi concluído com sucesso! \n\nEspero que goste de nossos produtos 🧡";
+
     final phone = phoneNumber.replaceAll(RegExp(r'\D'), '');
     if (phone.isEmpty) {
       developer.log("Número de telefone inválido após formatação");
       return;
     }
-    const url = "https://api.wzap.chat/v1/messages";
+
+    final messageApiUrl = dotenv.env['MESSAGE_API_URL'] ?? '';
+    final messageApiKey = dotenv.env['MESSAGE_API_KEY'] ?? '';
+    if (messageApiUrl.isEmpty || messageApiKey.isEmpty) {
+      developer.log("Erro: Variáveis de ambiente MESSAGE_API_URL ou MESSAGE_API_KEY não definidas");
+      return;
+    }
+
     final payload = {
-      "phone": phone,
-      "message": mensagem
+      "number": phone,
+      "text": mensagem,
     };
+
     final headers = {
       "Content-Type": "application/json",
-      "Token": "7343607cd11509da88407ea89353ebdd8a79bdf9c3152da4025274c08c370b7b90ab0b68307d28cf"
+      "apikey": messageApiKey,
     };
+
     try {
       final response = await http.post(
-        Uri.parse(url),
+        Uri.parse(messageApiUrl),
         headers: headers,
         body: jsonEncode(payload),
       );
@@ -225,8 +243,13 @@ class _DeliveriesScreenState extends State<DeliveriesScreen> with SingleTickerPr
       _isLoading = true;
     });
     try {
+      final baseUrl = dotenv.env['API_BASE_URL'] ?? '';
+      final markCompletedEndpoint = dotenv.env['MARK_COMPLETED_ENDPOINT'] ?? '';
+      if (baseUrl.isEmpty || markCompletedEndpoint.isEmpty) {
+        throw Exception('Erro: Variáveis de ambiente API_BASE_URL ou MARK_COMPLETED_ENDPOINT não definidas');
+      }
       final response = await http.post(
-        Uri.parse('https://aogosto.store/entregador/api.php?action=mark_completed'),
+        Uri.parse('$baseUrl$markCompletedEndpoint'),
         headers: {'Content-Type': 'application/x-www-form-urlencoded'},
         body: {
           'id_pedido': id,
@@ -276,12 +299,16 @@ class _DeliveriesScreenState extends State<DeliveriesScreen> with SingleTickerPr
       _isLoading = true;
     });
     try {
-      String apiUrl;
-      if (isCompleted) {
-        apiUrl = 'https://aogosto.store/entregador/api.php?action=delete_completed_delivery';
-      } else {
-        apiUrl = 'https://aogosto.store/entregador/api.php?action=delete_delivery';
-        final planilhaUrl = 'https://aogosto.store/entregador/painel_entregas.php?excluir=1&id=$id&data=$formattedDate&timestamp=${Uri.encodeComponent(timestamp)}&entregador=${Uri.encodeComponent(entregador)}';
+      final baseUrl = dotenv.env['API_BASE_URL'] ?? '';
+      final deleteDeliveryEndpoint = dotenv.env['DELETE_DELIVERY_ENDPOINT'] ?? '';
+      final deleteCompletedDeliveryEndpoint = dotenv.env['DELETE_COMPLETED_DELIVERY_ENDPOINT'] ?? '';
+      final planilhaExcluirEndpoint = dotenv.env['PLANILHA_EXCLUIR_ENDPOINT'] ?? '';
+      if (baseUrl.isEmpty || deleteDeliveryEndpoint.isEmpty || deleteCompletedDeliveryEndpoint.isEmpty || planilhaExcluirEndpoint.isEmpty) {
+        throw Exception('Erro: Variáveis de ambiente API_BASE_URL, DELETE_DELIVERY_ENDPOINT, DELETE_COMPLETED_DELIVERY_ENDPOINT ou PLANILHA_EXCLUIR_ENDPOINT não definidas');
+      }
+      String apiUrl = isCompleted ? '$baseUrl$deleteCompletedDeliveryEndpoint' : '$baseUrl$deleteDeliveryEndpoint';
+      if (!isCompleted) {
+        final planilhaUrl = '$baseUrl$planilhaExcluirEndpoint?excluir=1&id=$id&data=$formattedDate&timestamp=${Uri.encodeComponent(timestamp)}&entregador=${Uri.encodeComponent(entregador)}';
         final planilhaResponse = await http.get(
           Uri.parse(planilhaUrl),
         ).timeout(const Duration(seconds: 10));
@@ -345,7 +372,12 @@ class _DeliveriesScreenState extends State<DeliveriesScreen> with SingleTickerPr
       setState(() {
         _isLoading = true;
       });
-      final uri = Uri.parse('https://aogosto.store/entregador/painel_relatorios.php');
+      final baseUrl = dotenv.env['API_BASE_URL'] ?? '';
+      final reportsUploadEndpoint = dotenv.env['REPORTS_UPLOAD_ENDPOINT'] ?? '';
+      if (baseUrl.isEmpty || reportsUploadEndpoint.isEmpty) {
+        throw Exception('Erro: Variáveis de ambiente API_BASE_URL ou REPORTS_UPLOAD_ENDPOINT não definidas');
+      }
+      final uri = Uri.parse('$baseUrl$reportsUploadEndpoint');
       final request = http.MultipartRequest('POST', uri);
       request.fields['nome_entregador'] = entregador;
       final fileStream = http.ByteStream(image.openRead());
@@ -743,176 +775,194 @@ class _DeliveriesScreenState extends State<DeliveriesScreen> with SingleTickerPr
     super.dispose();
   }
 
-@override
-Widget build(BuildContext context) {
-  final screenSize = MediaQuery.of(context).size;
-  return Scaffold(
-    backgroundColor: light,
-    appBar: AppBar(
-      backgroundColor: Colors.white,
-      elevation: 1,
-      leading: IconButton(
-        icon: const Icon(Icons.arrow_left, color: primary, size: 24),
-        onPressed: () {
-          Navigator.pushReplacement(
-            context,
-            MaterialPageRoute(builder: (context) => const DashboardScreen()),
-          );
-        },
-        tooltip: 'Voltar ao Dashboard',
-      ),
-      title: const Text(
-        'Painel de Entregas',
-        style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: dark),
-      ),
-      centerTitle: true,
-      bottom: PreferredSize(
-        preferredSize: const Size.fromHeight(48),
-        child: Container(
-          decoration: const BoxDecoration(
-            border: Border(bottom: BorderSide(color: Colors.grey)),
-          ),
-          child: TabBar(
-            controller: _tabController,
-            labelColor: primary,
-            unselectedLabelColor: Colors.grey[600],
-            indicator: const UnderlineTabIndicator(
-              borderSide: BorderSide(color: primary, width: 3),
-              insets: EdgeInsets.symmetric(horizontal: 16),
+  @override
+  Widget build(BuildContext context) {
+    final screenSize = MediaQuery.of(context).size;
+    return Scaffold(
+      backgroundColor: light,
+      appBar: AppBar(
+        backgroundColor: Colors.white,
+        elevation: 1,
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_left, color: primary, size: 24),
+          onPressed: () {
+            Navigator.pushReplacement(
+              context,
+              MaterialPageRoute(builder: (context) => const DashboardScreen()),
+            );
+          },
+          tooltip: 'Voltar ao Dashboard',
+        ),
+        title: const Text(
+          'Painel de Entregas',
+          style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: dark),
+        ),
+        centerTitle: true,
+        bottom: PreferredSize(
+          preferredSize: const Size.fromHeight(48),
+          child: Container(
+            decoration: const BoxDecoration(
+              border: Border(bottom: BorderSide(color: Colors.grey)),
             ),
-            labelStyle: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
-            tabs: const [
-              Tab(text: 'Pedidos do Dia'),
-              Tab(text: 'Pedidos Concluídos'),
-            ],
+            child: TabBar(
+              controller: _tabController,
+              labelColor: primary,
+              unselectedLabelColor: Colors.grey[600],
+              indicator: const UnderlineTabIndicator(
+                borderSide: BorderSide(color: primary, width: 3),
+                insets: EdgeInsets.symmetric(horizontal: 16),
+              ),
+              labelStyle: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
+              tabs: const [
+                Tab(text: 'Pedidos do Dia'),
+                Tab(text: 'Pedidos Concluídos'),
+              ],
+            ),
           ),
         ),
       ),
-    ),
-    body: Stack(
-      children: [
-        _isLoading
-            ? Center(
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Container(
-                      width: 64,
-                      height: 64,
-                      margin: const EdgeInsets.only(bottom: 16),
-                      child: CircularProgressIndicator(
-                        strokeWidth: 4,
-                        valueColor: const AlwaysStoppedAnimation(primary),
-                        backgroundColor: Colors.transparent,
+      body: Stack(
+        children: [
+          _isLoading
+              ? Center(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Container(
+                        width: 64,
+                        height: 64,
+                        margin: const EdgeInsets.only(bottom: 16),
+                        child: CircularProgressIndicator(
+                          strokeWidth: 4,
+                          valueColor: const AlwaysStoppedAnimation(primary),
+                          backgroundColor: Colors.transparent,
+                        ),
                       ),
-                    ),
-                    const Text(
-                      'Carregando entregas...',
-                      style: TextStyle(fontSize: 16, color: Colors.grey),
-                    ),
-                  ],
-                ),
-              )
-            : _errorMessage != null
-                ? Center(
-                    child: Container(
-                      margin: const EdgeInsets.all(16),
-                      padding: const EdgeInsets.all(24),
-                      decoration: BoxDecoration(
-                        color: Colors.white,
-                        borderRadius: BorderRadius.circular(12),
-                        boxShadow: const [
-                          BoxShadow(
-                            color: Colors.black12,
-                            blurRadius: 6,
-                            offset: Offset(0, 2),
-                          ),
-                        ],
+                      const Text(
+                        'Carregando entregas...',
+                        style: TextStyle(fontSize: 16, color: Colors.grey),
                       ),
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          const Icon(Icons.error, color: Colors.red, size: 48),
-                          const SizedBox(height: 16),
-                          const Text(
-                            'Ocorreu um erro',
-                            style: TextStyle(fontSize: 18, fontWeight: FontWeight.w500, color: dark),
-                          ),
-                          const SizedBox(height: 8),
-                          Text(
-                            _errorMessage!,
-                            style: const TextStyle(fontSize: 16, color: Colors.grey),
-                            textAlign: TextAlign.center,
-                          ),
-                          const SizedBox(height: 24),
-                          ElevatedButton(
-                            onPressed: _fetchDeliveries,
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: primary,
-                              foregroundColor: Colors.white,
-                              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
-                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+                    ],
+                  ),
+                )
+              : _errorMessage != null
+                  ? Center(
+                      child: Container(
+                        margin: const EdgeInsets.all(16),
+                        padding: const EdgeInsets.all(24),
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(12),
+                          boxShadow: const [
+                            BoxShadow(
+                              color: Colors.black12,
+                              blurRadius: 6,
+                              offset: Offset(0, 2),
                             ),
-                            child: const Text('Tentar Novamente'),
-                          ),
-                        ],
-                      ),
-                    ),
-                  )
-                : Padding(
-                    padding: const EdgeInsets.all(12.0),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Container(
-                          padding: const EdgeInsets.all(16),
-                          decoration: BoxDecoration(
-                            color: Colors.white,
-                            borderRadius: BorderRadius.circular(12),
-                            boxShadow: const [
-                              BoxShadow(
-                                color: Colors.black12,
-                                blurRadius: 6,
-                                offset: Offset(0, 2),
+                          ],
+                        ),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const Icon(Icons.error, color: Colors.red, size: 48),
+                            const SizedBox(height: 16),
+                            const Text(
+                              'Ocorreu um erro',
+                              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w500, color: dark),
+                            ),
+                            const SizedBox(height: 8),
+                            Text(
+                              _errorMessage!,
+                              style: const TextStyle(fontSize: 16, color: Colors.grey),
+                              textAlign: TextAlign.center,
+                            ),
+                            const SizedBox(height: 24),
+                            ElevatedButton(
+                              onPressed: _fetchDeliveries,
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: primary,
+                                foregroundColor: Colors.white,
+                                padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
                               ),
-                            ],
-                          ),
-                          child: Column(
-                            children: [
-                              Row(
-                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Flexible(
-                                    child: Column(
-                                      crossAxisAlignment: CrossAxisAlignment.start,
-                                      children: [
-                                        Text(
-                                          'Olá, ${prefs.getString('entregador') ?? ''}',
-                                          style: const TextStyle(
-                                            fontSize: 18,
-                                            fontWeight: FontWeight.w600,
-                                            color: dark,
+                              child: const Text('Tentar Novamente'),
+                            ),
+                          ],
+                        ),
+                      ),
+                    )
+                  : Padding(
+                      padding: const EdgeInsets.all(12.0),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.all(16),
+                            decoration: BoxDecoration(
+                              color: Colors.white,
+                              borderRadius: BorderRadius.circular(12),
+                              boxShadow: const [
+                                BoxShadow(
+                                  color: Colors.black12,
+                                  blurRadius: 6,
+                                  offset: Offset(0, 2),
+                                ),
+                              ],
+                            ),
+                            child: Column(
+                              children: [
+                                Row(
+                                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Flexible(
+                                      child: Column(
+                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        children: [
+                                          Text(
+                                            'Olá, ${prefs.getString('entregador') ?? ''}',
+                                            style: const TextStyle(
+                                              fontSize: 18,
+                                              fontWeight: FontWeight.w600,
+                                              color: dark,
+                                            ),
+                                            overflow: TextOverflow.ellipsis,
                                           ),
-                                          overflow: TextOverflow.ellipsis,
-                                        ),
-                                        Text(
-                                          _tabController.index == 0
-                                              ? 'Todas as Entregas Pendentes'
-                                              : 'Datas: ${_selectedDates.map((date) => DateFormat('dd/MM').format(date)).join(', ')}',
-                                          style: const TextStyle(fontSize: 14, color: Colors.grey),
-                                          overflow: TextOverflow.ellipsis,
-                                        ),
-                                      ],
+                                          Text(
+                                            _tabController.index == 0
+                                                ? 'Todas as Entregas Pendentes'
+                                                : 'Datas: ${_selectedDates.map((date) => DateFormat('dd/MM').format(date)).join(', ')}',
+                                            style: const TextStyle(fontSize: 14, color: Colors.grey),
+                                            overflow: TextOverflow.ellipsis,
+                                          ),
+                                        ],
+                                      ),
                                     ),
-                                  ),
-                                  Wrap(
-                                    spacing: 8,
-                                    runSpacing: 8,
-                                    children: [
-                                      if (_tabController.index == 1)
+                                    Wrap(
+                                      spacing: 8,
+                                      runSpacing: 8,
+                                      children: [
+                                        if (_tabController.index == 1)
+                                          ElevatedButton(
+                                            onPressed: () => _selectDate(context),
+                                            style: ElevatedButton.styleFrom(
+                                              backgroundColor: Colors.grey[100],
+                                              foregroundColor: Colors.grey[700],
+                                              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+                                              elevation: 0,
+                                            ),
+                                            child: const Row(
+                                              mainAxisSize: MainAxisSize.min,
+                                              children: [
+                                                Icon(Icons.calendar_today, size: 14),
+                                                SizedBox(width: 6),
+                                                Text('Filtrar', style: TextStyle(fontSize: 12)),
+                                              ],
+                                            ),
+                                          ),
                                         ElevatedButton(
-                                          onPressed: () => _selectDate(context),
+                                          onPressed: _fetchDeliveries,
                                           style: ElevatedButton.styleFrom(
                                             backgroundColor: Colors.grey[100],
                                             foregroundColor: Colors.grey[700],
@@ -923,194 +973,176 @@ Widget build(BuildContext context) {
                                           child: const Row(
                                             mainAxisSize: MainAxisSize.min,
                                             children: [
-                                              Icon(Icons.calendar_today, size: 14),
+                                              Icon(Icons.refresh, size: 14),
                                               SizedBox(width: 6),
-                                              Text('Filtrar', style: TextStyle(fontSize: 12)),
+                                              Text('Atualizar', style: TextStyle(fontSize: 12)),
                                             ],
                                           ),
                                         ),
-                                      ElevatedButton(
-                                        onPressed: _fetchDeliveries,
-                                        style: ElevatedButton.styleFrom(
-                                          backgroundColor: Colors.grey[100],
-                                          foregroundColor: Colors.grey[700],
-                                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
-                                          elevation: 0,
+                                      ],
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 12),
+                                Row(
+                                  children: [
+                                    Flexible(
+                                      flex: 1,
+                                      child: Container(
+                                        constraints: const BoxConstraints(
+                                          minWidth: 140,
+                                          maxWidth: 200,
                                         ),
-                                        child: const Row(
-                                          mainAxisSize: MainAxisSize.min,
+                                        padding: const EdgeInsets.all(12),
+                                        decoration: BoxDecoration(
+                                          color: Colors.blue[50],
+                                          borderRadius: BorderRadius.circular(8),
+                                        ),
+                                        child: Row(
                                           children: [
-                                            Icon(Icons.refresh, size: 14),
-                                            SizedBox(width: 6),
-                                            Text('Atualizar', style: TextStyle(fontSize: 12)),
+                                            Container(
+                                              padding: const EdgeInsets.all(10),
+                                              decoration: BoxDecoration(
+                                                color: Colors.blue[100],
+                                                borderRadius: BorderRadius.circular(20),
+                                              ),
+                                              child: const Icon(Icons.local_shipping, color: Colors.blue, size: 20),
+                                            ),
+                                            const SizedBox(width: 12),
+                                            Expanded(
+                                              child: Column(
+                                                crossAxisAlignment: CrossAxisAlignment.start,
+                                                children: [
+                                                  const Text(
+                                                    'Total de Pedidos',
+                                                    style: TextStyle(fontSize: 12, color: Colors.grey),
+                                                    overflow: TextOverflow.ellipsis,
+                                                  ),
+                                                  Text(
+                                                    '${_tabController.index == 0 ? _pendingDeliveries.length : _completedDeliveries.length}',
+                                                    style: const TextStyle(
+                                                      fontSize: 18,
+                                                      fontWeight: FontWeight.bold,
+                                                      color: dark,
+                                                    ),
+                                                    overflow: TextOverflow.ellipsis,
+                                                  ),
+                                                ],
+                                              ),
+                                            ),
                                           ],
                                         ),
                                       ),
-                                    ],
-                                  ),
-                                ],
-                              ),
-                              const SizedBox(height: 12),
-                              Row(
-                                children: [
-                                  Flexible(
-                                    flex: 1,
-                                    child: Container(
-                                      constraints: const BoxConstraints(
-                                        minWidth: 140,
-                                        maxWidth: 200,
-                                      ),
-                                      padding: const EdgeInsets.all(12),
-                                      decoration: BoxDecoration(
-                                        color: Colors.blue[50],
-                                        borderRadius: BorderRadius.circular(8),
-                                      ),
-                                      child: Row(
-                                        children: [
-                                          Container(
-                                            padding: const EdgeInsets.all(10),
-                                            decoration: BoxDecoration(
-                                              color: Colors.blue[100],
-                                              borderRadius: BorderRadius.circular(20),
+                                    ),
+                                    const SizedBox(width: 12),
+                                    Flexible(
+                                      flex: 1,
+                                      child: Container(
+                                        constraints: const BoxConstraints(
+                                          minWidth: 140,
+                                          maxWidth: 200,
+                                        ),
+                                        padding: const EdgeInsets.all(12),
+                                        decoration: BoxDecoration(
+                                          color: Colors.green[50],
+                                          borderRadius: BorderRadius.circular(8),
+                                        ),
+                                        child: Row(
+                                          children: [
+                                            Container(
+                                              padding: const EdgeInsets.all(10),
+                                              decoration: BoxDecoration(
+                                                color: Colors.green[100],
+                                                borderRadius: BorderRadius.circular(20),
+                                              ),
+                                              child: const Icon(Icons.attach_money, color: Colors.green, size: 20),
                                             ),
-                                            child: const Icon(Icons.local_shipping, color: Colors.blue, size: 20),
-                                          ),
-                                          const SizedBox(width: 12),
-                                          Expanded(
-                                            child: Column(
-                                              crossAxisAlignment: CrossAxisAlignment.start,
-                                              children: [
-                                                const Text(
-                                                  'Total de Pedidos',
-                                                  style: TextStyle(fontSize: 12, color: Colors.grey),
-                                                  overflow: TextOverflow.ellipsis,
-                                                ),
-                                                Text(
-                                                  '${_tabController.index == 0 ? _pendingDeliveries.length : _completedDeliveries.length}',
-                                                  style: const TextStyle(
-                                                    fontSize: 18,
-                                                    fontWeight: FontWeight.bold,
-                                                    color: dark,
+                                            const SizedBox(width: 12),
+                                            Expanded(
+                                              child: Column(
+                                                crossAxisAlignment: CrossAxisAlignment.start,
+                                                children: [
+                                                  const Text(
+                                                    'Total a Receber',
+                                                    style: TextStyle(fontSize: 12, color: Colors.grey),
+                                                    overflow: TextOverflow.ellipsis,
                                                   ),
-                                                  overflow: TextOverflow.ellipsis,
-                                                ),
-                                              ],
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                    ),
-                                  ),
-                                  const SizedBox(width: 12),
-                                  Flexible(
-                                    flex: 1,
-                                    child: Container(
-                                      constraints: const BoxConstraints(
-                                        minWidth: 140,
-                                        maxWidth: 200,
-                                      ),
-                                      padding: const EdgeInsets.all(12),
-                                      decoration: BoxDecoration(
-                                        color: Colors.green[50],
-                                        borderRadius: BorderRadius.circular(8),
-                                      ),
-                                      child: Row(
-                                        children: [
-                                          Container(
-                                            padding: const EdgeInsets.all(10),
-                                            decoration: BoxDecoration(
-                                              color: Colors.green[100],
-                                              borderRadius: BorderRadius.circular(20),
-                                            ),
-                                            child: const Icon(Icons.attach_money, color: Colors.green, size: 20),
-                                          ),
-                                          const SizedBox(width: 12),
-                                          Expanded(
-                                            child: Column(
-                                              crossAxisAlignment: CrossAxisAlignment.start,
-                                              children: [
-                                                const Text(
-                                                  'Total a Receber',
-                                                  style: TextStyle(fontSize: 12, color: Colors.grey),
-                                                  overflow: TextOverflow.ellipsis,
-                                                ),
-                                                Text(
-                                                  'R\$ ${NumberFormat.currency(locale: 'pt_BR', symbol: '', decimalDigits: 2).format(_tabController.index == 0 ? _pendingDeliveries.fold(0.0, (sum, item) => sum + item['taxa_entrega']) : _completedDeliveries.fold(0.0, (sum, item) => sum + item['taxa_entrega']))}',
-                                                  style: const TextStyle(
-                                                    fontSize: 18,
-                                                    fontWeight: FontWeight.bold,
-                                                    color: dark,
+                                                  Text(
+                                                    'R\$ ${NumberFormat.currency(locale: 'pt_BR', symbol: '', decimalDigits: 2).format(_tabController.index == 0 ? _pendingDeliveries.fold(0.0, (sum, item) => sum + item['taxa_entrega']) : _completedDeliveries.fold(0.0, (sum, item) => sum + item['taxa_entrega']))}',
+                                                    style: const TextStyle(
+                                                      fontSize: 18,
+                                                      fontWeight: FontWeight.bold,
+                                                      color: dark,
+                                                    ),
+                                                    overflow: TextOverflow.ellipsis,
                                                   ),
-                                                  overflow: TextOverflow.ellipsis,
-                                                ),
-                                              ],
+                                                ],
+                                              ),
                                             ),
-                                          ),
-                                        ],
+                                          ],
+                                        ),
                                       ),
                                     ),
-                                  ),
-                                ],
-                              ),
-                            ],
+                                  ],
+                                ),
+                              ],
+                            ),
                           ),
-                        ),
-                        const SizedBox(height: 16),
-                        Expanded(
-                          child: TabBarView(
-                            controller: _tabController,
-                            children: [
-                              _pendingDeliveries.isEmpty
-                                  ? _buildEmptyState('Nenhuma entrega pendente', 'Você não tem entregas pendentes no momento.')
-                                  : ListView.builder(
-                                      itemCount: _pendingDeliveries.length,
-                                      itemBuilder: (context, index) {
-                                        final delivery = _pendingDeliveries[index];
-                                        return _buildDeliveryCard(context, delivery, false, index);
-                                      },
-                                    ),
-                              _completedDeliveries.isEmpty
-                                  ? _buildEmptyState(
-                                      'Nenhuma entrega concluída',
-                                      'Nenhuma entrega encontrada para as datas selecionadas.',
-                                    )
-                                  : ListView.builder(
-                                      itemCount: _completedDeliveries.length,
-                                      itemBuilder: (context, index) {
-                                        final delivery = _completedDeliveries[index];
-                                        return _buildDeliveryCard(context, delivery, true, index);
-                                      },
-                                    ),
-                            ],
+                          const SizedBox(height: 16),
+                          Expanded(
+                            child: TabBarView(
+                              controller: _tabController,
+                              children: [
+                                _pendingDeliveries.isEmpty
+                                    ? _buildEmptyState('Nenhuma entrega pendente', 'Você não tem entregas pendentes no momento.')
+                                    : ListView.builder(
+                                        itemCount: _pendingDeliveries.length,
+                                        itemBuilder: (context, index) {
+                                          final delivery = _pendingDeliveries[index];
+                                          return _buildDeliveryCard(context, delivery, false, index);
+                                        },
+                                      ),
+                                _completedDeliveries.isEmpty
+                                    ? _buildEmptyState(
+                                        'Nenhuma entrega concluída',
+                                        'Nenhuma entrega encontrada para as datas selecionadas.',
+                                      )
+                                    : ListView.builder(
+                                        itemCount: _completedDeliveries.length,
+                                        itemBuilder: (context, index) {
+                                          final delivery = _completedDeliveries[index];
+                                          return _buildDeliveryCard(context, delivery, true, index);
+                                        },
+                                      ),
+                              ],
+                            ),
                           ),
-                        ),
-                      ],
+                        ],
+                      ),
                     ),
+          DraggableFloatingButton(
+            // Posiciona o botão no canto inferior direito inicialmente
+            initialOffset: Offset(screenSize.width - 80, screenSize.height - 140 - kBottomNavigationBarHeight),
+            onPressed: () {
+              if (!(Platform.isAndroid || Platform.isIOS)) {
+                if (!mounted) return;
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('Escaneamento de QR Code não está disponível nesta plataforma.'),
                   ),
-        DraggableFloatingButton(
-          // Posiciona o botão no canto inferior direito inicialmente
-          initialOffset: Offset(screenSize.width - 80, screenSize.height - 140 - kBottomNavigationBarHeight),
-          onPressed: () {
-            if (!(Platform.isAndroid || Platform.isIOS)) {
-              if (!mounted) return;
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(
-                  content: Text('Escaneamento de QR Code não está disponível nesta plataforma.'),
-                ),
-              );
-            } else {
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (context) => const ScannerScreen()),
-              );
-            }
-          },
-        ),
-      ],
-    ),
-  );
-}
+                );
+              } else {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (context) => const ScannerScreen()),
+                );
+              }
+            },
+          ),
+        ],
+      ),
+    );
+  }
 
   Widget _buildEmptyState(String title, String subtitle) {
     return Container(

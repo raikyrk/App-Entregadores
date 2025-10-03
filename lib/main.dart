@@ -5,7 +5,7 @@ import 'dart:convert';
 import 'package:intl/intl.dart';
 import 'package:syncfusion_flutter_datepicker/datepicker.dart';
 import 'package:html/parser.dart' as html_parser;
-
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'login_screen.dart';
 import 'dashboard_screen.dart';
 import 'scanner_screen.dart';
@@ -55,6 +55,7 @@ class _AnimatedScaleButtonState extends State<AnimatedScaleButton> {
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await dotenv.load(fileName: ".env"); // Carrega o arquivo .env
   runApp(const MyApp());
 }
 

@@ -5,7 +5,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:path_provider/path_provider.dart';
 import 'package:url_launcher/url_launcher.dart';
-
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'main.dart'; // AnimatedScaleButton
 import 'dashboard_screen.dart';
 
@@ -19,8 +19,8 @@ class LoginScreen extends StatefulWidget {
 class LoginScreenState extends State<LoginScreen> {
   final _pinController = TextEditingController();
   String? _errorMessage;
-  // Hash atual hardcoded no aplicativo
-  static const String currentHash = 'v0'; // Substitua pela hash correta
+  // Hash atual mantido no código conforme solicitado
+  static const String currentHash = 'v1';
 
   @override
   void initState() {
@@ -52,7 +52,13 @@ class LoginScreenState extends State<LoginScreen> {
       final directory = await getTemporaryDirectory();
       final file = File('${directory.path}/entregador.log');
       if (!await file.exists()) return;
-      final uri = Uri.parse('https://aogosto.store/entregador/entregador.log');
+      final baseUrl = dotenv.env['API_BASE_URL'] ?? '';
+      final logUploadEndpoint = dotenv.env['LOG_UPLOAD_ENDPOINT'] ?? '';
+      if (baseUrl.isEmpty || logUploadEndpoint.isEmpty) {
+        await _writeLog('Erro: Variáveis de ambiente API_BASE_URL ou LOG_UPLOAD_ENDPOINT não definidas');
+        return;
+      }
+      final uri = Uri.parse('$baseUrl$logUploadEndpoint');
       final request = http.MultipartRequest('POST', uri);
       request.files.add(await http.MultipartFile.fromPath('log_file', file.path));
       await request.send().timeout(const Duration(seconds: 10));
@@ -75,8 +81,17 @@ class LoginScreenState extends State<LoginScreen> {
     for (int attempt = 1; attempt <= 3; attempt++) {
       try {
         await _writeLog('Tentativa $attempt - Validando PIN');
+        final baseUrl = dotenv.env['API_BASE_URL'] ?? '';
+        final validatePinEndpoint = dotenv.env['VALIDATE_PIN_ENDPOINT'] ?? '';
+        if (baseUrl.isEmpty || validatePinEndpoint.isEmpty) {
+          setState(() {
+            _errorMessage = 'Erro: Configuração de API ausente.';
+          });
+          await _writeLog('Erro: Variáveis de ambiente API_BASE_URL ou VALIDATE_PIN_ENDPOINT não definidas');
+          return;
+        }
         final response = await http.post(
-          Uri.parse('https://aogosto.store/entregador/api.php?action=validate_pin'),
+          Uri.parse('$baseUrl$validatePinEndpoint'),
           headers: {'Content-Type': 'application/x-www-form-urlencoded'},
           body: {'pin': pin},
         ).timeout(const Duration(seconds: 10));
@@ -112,9 +127,18 @@ class LoginScreenState extends State<LoginScreen> {
   Future<void> _verificarAtualizacao() async {
     try {
       await _writeLog('Verificando atualização na API');
-
+      final baseUrl = dotenv.env['API_BASE_URL'] ?? '';
+      final checkUpdateEndpoint = dotenv.env['CHECK_UPDATE_ENDPOINT'] ?? '';
+      final apkDownloadUrl = dotenv.env['APK_DOWNLOAD_URL'] ?? '';
+      if (baseUrl.isEmpty || checkUpdateEndpoint.isEmpty || apkDownloadUrl.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Erro: Configuração de atualização ausente.')),
+        );
+        await _writeLog('Erro: Variáveis de ambiente API_BASE_URL, CHECK_UPDATE_ENDPOINT ou APK_DOWNLOAD_URL não definidas');
+        return;
+      }
       final response = await http.get(
-        Uri.parse('https://aogosto.store/entregador/api.php?action=get_latest_version'),
+        Uri.parse('$baseUrl$checkUpdateEndpoint'),
         headers: {
           'Cache-Control': 'no-cache, no-store, must-revalidate',
           'Pragma': 'no-cache',
@@ -138,7 +162,7 @@ class LoginScreenState extends State<LoginScreen> {
       }
 
       final sha256Checksum = (data['sha256Checksum'] ?? '').toString().toLowerCase();
-      final apkUrl = data['urlApk'] ?? 'https://aogosto.store/entregador/download/app-release.apk';
+      final apkUrl = data['urlApk'] ?? '$baseUrl$apkDownloadUrl';
       final ultimaVersao = data['ultimaVersao'] ?? 'desconhecida';
 
       if (sha256Checksum.isEmpty) {
@@ -162,8 +186,7 @@ class LoginScreenState extends State<LoginScreen> {
               actions: [
                 TextButton(
                   onPressed: () async {
-                    final url = Uri.parse(
-                        'https://aogosto.store/entregador/download/app-release.apk?ts=${DateTime.now().millisecondsSinceEpoch}');
+                    final url = Uri.parse('$apkUrl?ts=${DateTime.now().millisecondsSinceEpoch}');
                     if (!await launchUrl(url, mode: LaunchMode.externalApplication)) {
                       ScaffoldMessenger.of(context).showSnackBar(
                         const SnackBar(content: Text('Não foi possível abrir o link de atualização')),
