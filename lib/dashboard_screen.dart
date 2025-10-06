@@ -226,18 +226,18 @@ class DashboardScreenState extends State<DashboardScreen> with SingleTickerProvi
       final yesterdayAverage = await calculateAverageForDate(yesterday);
       String averageTime;
       if (todayAverage >= 60) {
-        final hours = (todayAverage ~/ 60).toInt();
+        final hours = (todayAverage / 60).floor();
         final minutes = (todayAverage % 60).round();
-        averageTime = '${hours}h${minutes}m';
+        averageTime = '${hours}h ${minutes}m';
       } else {
         averageTime = '${todayAverage.round()} min';
       }
       String difference;
       final diffMinutes = todayAverage - yesterdayAverage;
       if (diffMinutes.abs() >= 60) {
-        final hours = (diffMinutes.abs() ~/ 60).toInt();
+        final hours = (diffMinutes.abs() / 60).floor();
         final minutes = (diffMinutes.abs() % 60).round();
-        difference = '${diffMinutes >= 0 ? '+' : '-'}${hours}h${minutes}m';
+        difference = '${diffMinutes >= 0 ? '+' : '-'}${hours}h ${minutes}m';
       } else {
         difference = '${diffMinutes >= 0 ? '+' : '-'}${diffMinutes.abs().round()} min';
       }
@@ -658,130 +658,130 @@ class DashboardScreenState extends State<DashboardScreen> with SingleTickerProvi
                     ),
                     const SizedBox(height: 16),
                     FutureBuilder<Map<String, dynamic>>(
-                      future: _getDailyDeliveries(),
-                      builder: (context, snapshot) {
-                        if (snapshot.connectionState == ConnectionState.waiting) {
-                          return const CircularProgressIndicator(color: Color(0xFFF28C38));
-                        }
-                        final data = snapshot.data ?? {'completed': 0, 'pending': 0, 'total': 0};
-                        return Row(
-                          children: [
-                            Expanded(
-                              child: GestureDetector(
-                                onTap: () async {
-                                  await _writeLog('Card Entregas Hoje clicado');
-                                  if (!mounted) return;
-                                  Navigator.push(
-                                    context,
-                                    MaterialPageRoute(
-                                      builder: (context) => const DeliveriesScreen(initialTabIndex: 0),
-                                    ),
-                                  );
-                                },
-                                child: Container(
-                                  decoration: BoxDecoration(
-                                    color: const Color(0xFFFFE4C4),
-                                    borderRadius: BorderRadius.circular(8),
-                                  ),
-                                  padding: const EdgeInsets.all(12),
-                                  child: Row(
-                                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                    children: [
-                                      Column(
-                                        crossAxisAlignment: CrossAxisAlignment.start,
-                                        children: [
-                                          const Text(
-                                            'Entregas hoje',
-                                            style: TextStyle(
-                                              fontSize: 14,
-                                              color: Color(0xFF4B5563),
-                                              fontFamily: 'Poppins',
-                                            ),
-                                          ),
-                                          Text(
-                                            '${data['total']}',
-                                            style: const TextStyle(
-                                              fontSize: 24,
-                                              color: Color(0xFFF28C38),
-                                              fontWeight: FontWeight.bold,
-                                              fontFamily: 'Poppins',
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                      Container(
-                                        width: 48,
-                                        height: 48,
-                                        decoration: BoxDecoration(
-                                          color: const Color(0xFFFFF5E6),
-                                          borderRadius: BorderRadius.circular(24),
-                                        ),
-                                        child: const Icon(
-                                          Icons.inventory_2,
-                                          color: Color(0xFFF28C38),
-                                          size: 24,
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                              ),
-                            ),
-                            const SizedBox(width: 16),
-                            Expanded(
-                              child: GestureDetector(
-                                onTap: () async {
-                                  await _writeLog('Card Entregas Concluídas clicado');
-                                  if (!mounted) return;
-                                  Navigator.push(
-                                    context,
-                                    MaterialPageRoute(
-                                      builder: (context) => const DeliveriesScreen(initialTabIndex: 1),
-                                    ),
-                                  );
-                                },
-                                child: Container(
-                                  decoration: BoxDecoration(
-                                    color: const Color(0xFFE7F6E9),
-                                    borderRadius: BorderRadius.circular(8),
-                                  ),
-                                  padding: const EdgeInsets.all(12),
-                                  child: Row(
-                                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                    children: [
-                                      Column(
-                                        crossAxisAlignment: CrossAxisAlignment.start,
-                                        children: [
-                                          const Text(
-                                            'Concluídas hoje',
-                                            style: TextStyle(
-                                              fontSize: 14,
-                                              color: Color(0xFF4B5563),
-                                              fontFamily: 'Poppins',
-                                            ),
-                                          ),
-                                          Text(
-                                            '${data['completed']}',
-                                            style: const TextStyle(
-                                              fontSize: 24,
-                                              color: Color(0xFF16A34A),
-                                              fontWeight: FontWeight.bold,
-                                              fontFamily: 'Poppins',
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                      Container(
-                                        width: 48,
-                                        height: 48,
-                                        decoration: BoxDecoration(
-                                          color: const Color(0xFFD1FAE5),
-                                          borderRadius: BorderRadius.circular(24),
-                                        ),
-                                        child: const Icon(
-                                          Icons.check_circle,
-                                          color: Color(0xFF16A34A),
-                                          size: 24,
+  future: _getDailyDeliveries(),
+  builder: (context, snapshot) {
+    if (snapshot.connectionState == ConnectionState.waiting) {
+      return const CircularProgressIndicator(color: Color(0xFFF28C38));
+    }
+    final data = snapshot.data ?? {'completed': 0, 'pending': 0, 'total': 0};
+    return Row(
+      children: [
+        Expanded(
+          child: GestureDetector(
+            onTap: () async {
+              await _writeLog('Card Entregas Hoje clicado');
+              if (!mounted) return;
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => const DeliveriesScreen(initialTabIndex: 0),
+                ),
+              );
+            },
+            child: Container(
+              decoration: BoxDecoration(
+                color: const Color(0xFFFFE4C4),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              padding: const EdgeInsets.all(8), // Reduzido de 12 para 8
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'Entregas hoje',
+                        style: TextStyle(
+                          fontSize: 12, // Reduzido de 14
+                          color: Color(0xFF4B5563),
+                          fontFamily: 'Poppins',
+                        ),
+                      ),
+                      Text(
+                        '${data['total']}',
+                        style: const TextStyle(
+                          fontSize: 20, // Reduzido de 24
+                          color: Color(0xFFF28C38),
+                          fontWeight: FontWeight.bold,
+                          fontFamily: 'Poppins',
+                        ),
+                      ),
+                    ],
+                  ),
+                  Container(
+                    width: 40, // Reduzido de 48
+                    height: 40, // Reduzido de 48
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFFFF5E6),
+                      borderRadius: BorderRadius.circular(20), // Reduzido de 24
+                    ),
+                    child: const Icon(
+                      Icons.inventory_2,
+                      color: Color(0xFFF28C38),
+                      size: 20, // Reduzido de 24
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(width: 8), // Reduzido de 16
+        Expanded(
+          child: GestureDetector(
+            onTap: () async {
+              await _writeLog('Card Entregas Concluídas clicado');
+              if (!mounted) return;
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => const DeliveriesScreen(initialTabIndex: 1),
+                ),
+              );
+            },
+            child: Container(
+              decoration: BoxDecoration(
+                color: const Color(0xFFE7F6E9),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              padding: const EdgeInsets.all(8), // Reduzido de 12
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'Concluídas hoje',
+                        style: TextStyle(
+                          fontSize: 12, // Reduzido de 14
+                          color: Color(0xFF4B5563),
+                          fontFamily: 'Poppins',
+                        ),
+                      ),
+                      Text(
+                        '${data['completed']}',
+                        style: const TextStyle(
+                          fontSize: 20, // Reduzido de 24
+                          color: Color(0xFF16A34A),
+                          fontWeight: FontWeight.bold,
+                          fontFamily: 'Poppins',
+                        ),
+                      ),
+                    ],
+                  ),
+                  Container(
+                    width: 40, // Reduzido de 48
+                    height: 40, // Reduzido de 48
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFD1FAE5),
+                      borderRadius: BorderRadius.circular(20), // Reduzido de 24
+                    ),
+                    child: const Icon(
+                      Icons.check_circle,
+                      color: Color(0xFF16A34A),
+                      size: 20, // Reduzido de 24
                                         ),
                                       ),
                                     ],
@@ -861,6 +861,7 @@ class DashboardScreenState extends State<DashboardScreen> with SingleTickerProvi
                         final data = snapshot.data ?? {'averageTime': '0 min', 'difference': '0 min'};
                         final avgTime = data['averageTime']!;
                         final difference = data['difference']!;
+                        final color = difference.startsWith('+') ? Colors.green : difference == '0 min' ? Colors.white : Colors.red;
                         return Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
@@ -902,7 +903,7 @@ class DashboardScreenState extends State<DashboardScreen> with SingleTickerProvi
                                     difference,
                                     style: TextStyle(
                                       fontSize: 14,
-                                      color: difference.startsWith('-') ? Colors.green : difference == '0 min' ? Colors.white : Colors.red,
+                                      color: color,
                                       fontWeight: FontWeight.bold,
                                       fontFamily: 'Poppins',
                                     ),
