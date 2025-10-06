@@ -38,4 +38,3 @@ Permite escanear QR codes, acompanhar entregas, visualizar taxas e enviar relat�
 ## Observações
 - Otimizado para Android
 - Requer câmera e internet
-- ⚠️ Token da API do WhatsApp está hardcoded; recomenda-se movê-lo para arquivo seguro
