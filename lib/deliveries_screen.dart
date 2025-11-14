@@ -46,6 +46,7 @@ class _DeliveriesScreenState extends State<DeliveriesScreen>
   static const Color info = Color(0xFF4299E1);
   static const Color light = Color(0xFFF7FAFC);
   static const Color dark = Color(0xFF1A202C);
+  static const Color cardBg = Color(0xFF2C2C2E);
 
   @override
   void initState() {
@@ -81,36 +82,19 @@ class _DeliveriesScreenState extends State<DeliveriesScreen>
         if (!mounted) return;
         showDialog(
           context: context,
-          builder: (_) => AlertDialog(
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-            backgroundColor: Colors.white,
-            title: const Text('Lembrete de Conclusão',
-                style: TextStyle(fontSize: 18, fontWeight: FontWeight.w500, color: dark)),
-            content: Text(
-                'O pedido #${delivery['id_pedido']} está pendente há mais de 1 hora. Deseja marcá-lo como concluído?',
-                style: const TextStyle(fontSize: 14, color: Colors.grey)),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(context),
-                style: TextButton.styleFrom(
-                    foregroundColor: Colors.grey[700],
-                    backgroundColor: Colors.white,
-                    side: const BorderSide(color: Colors.grey),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8))),
-                child: const Text('Ignorar'),
-              ),
-              TextButton(
-                onPressed: () {
-                  Navigator.pop(context);
-                  _markAsCompleted(delivery['id_pedido'], delivery['timestamp'], delivery['telefone']);
-                },
-                style: TextButton.styleFrom(
-                    foregroundColor: Colors.white,
-                    backgroundColor: success,
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8))),
-                child: const Text('Concluir'),
-              ),
-            ],
+          barrierDismissible: false,
+          builder: (_) => _buildModernDialog(
+            icon: Icons.access_time_rounded,
+            iconColor: primary,
+            title: 'Lembrete de Conclusão',
+            message: 'O pedido #${delivery['id_pedido']} está pendente há mais de 1 hora. Deseja marcá-lo como concluído?',
+            primaryAction: () {
+              Navigator.pop(context);
+              _markAsCompleted(delivery['id_pedido'], delivery['timestamp'], delivery['telefone']);
+            },
+            primaryLabel: 'Concluir',
+            secondaryAction: () => Navigator.pop(context),
+            secondaryLabel: 'Ignorar',
           ),
         );
         break;
@@ -199,20 +183,43 @@ class _DeliveriesScreenState extends State<DeliveriesScreen>
     }
 
     const mensagem = "Parece que o seu pedido foi concluído com sucesso! \n\nEspero que goste de nossos produtos";
+
     final phone = phoneNumber.replaceAll(RegExp(r'\D'), '');
     if (phone.isEmpty) return;
 
-    final url = dotenv.env['MESSAGE_API_URL'] ?? '';
-    final key = dotenv.env['MESSAGE_API_KEY'] ?? '';
-    if (url.isEmpty || key.isEmpty) return;
+    final messageApiUrl = dotenv.env['MESSAGE_API_URL'];
+    final messageApiToken = dotenv.env['MESSAGE_API_TOKEN'];
 
-    final payload = {"number": phone, "text": mensagem};
-    final headers = {"Content-Type": "application/json", "apikey": key};
+    if (messageApiUrl == null || messageApiUrl.isEmpty ||
+        messageApiToken == null || messageApiToken.isEmpty) {
+      developer.log('MESSAGE_API_URL ou MESSAGE_API_TOKEN não definidos');
+      return;
+    }
+
+    final payload = {
+      "number": phone,
+      "text": mensagem
+    };
+
+    final headers = {
+      "Accept": "application/json",
+      "Content-Type": "application/json",
+      "token": messageApiToken,
+    };
 
     try {
-      await http.post(Uri.parse(url), headers: headers, body: jsonEncode(payload)).timeout(const Duration(seconds: 10));
+      final response = await http.post(
+        Uri.parse(messageApiUrl),
+        headers: headers,
+        body: jsonEncode(payload),
+      ).timeout(const Duration(seconds: 10));
+
+      if (kDebugMode) {
+        developer.log('Mensagem concluída enviada: ${response.statusCode}');
+        developer.log('Response: ${response.body}');
+      }
     } catch (e) {
-      developer.log('Erro ao enviar mensagem: $e');
+      developer.log('Erro ao enviar mensagem concluída: $e');
     }
   }
 
@@ -243,55 +250,114 @@ class _DeliveriesScreenState extends State<DeliveriesScreen>
       await _fetchDeliveries();
       if (!mounted) return;
       setState(() => _isLoading = false);
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Entrega concluída!')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Row(
+            children: const [
+              Icon(Icons.check_circle, color: Colors.white),
+              SizedBox(width: 12),
+              Text('Entrega concluída com sucesso!'),
+            ],
+          ),
+          backgroundColor: success,
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        ),
+      );
     } catch (e) {
       if (!mounted) return;
       setState(() => _isLoading = false);
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Erro ao concluir: $e')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Row(
+            children: [
+              const Icon(Icons.error, color: Colors.white),
+              const SizedBox(width: 12),
+              Expanded(child: Text('Erro ao concluir: $e')),
+            ],
+          ),
+          backgroundColor: danger,
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        ),
+      );
     }
   }
 
   Future<void> _deleteDelivery(String id, String timestamp, bool isCompleted) async {
-    final entregador = _prefs.getString('entregador') ?? '';
-    final today = DateFormat('yyyy-MM-dd').format(DateTime.now());
-    setState(() => _isLoading = true);
-    try {
-      final baseUrl = dotenv.env['API_BASE_URL'] ?? '';
-      final deletePend = dotenv.env['DELETE_DELIVERY_ENDPOINT'] ?? '';
-      final deleteComp = dotenv.env['DELETE_COMPLETED_DELIVERY_ENDPOINT'] ?? '';
-      final planilhaEx = dotenv.env['PLANILHA_EXCLUIR_ENDPOINT'] ?? '';
+  final entregador = _prefs.getString('entregador') ?? '';
+  final today = DateFormat('yyyy-MM-dd').format(DateTime.now());
+  setState(() => _isLoading = true);
 
-      if (baseUrl.isEmpty || deletePend.isEmpty || deleteComp.isEmpty || planilhaEx.isEmpty) {
-        throw Exception('Endpoints de exclusão ausentes');
-      }
+  try {
+    final baseUrl = dotenv.env['API_BASE_URL'] ?? '';
+    final deletePend = dotenv.env['DELETE_DELIVERY_ENDPOINT'] ?? '';
+    final deleteComp = dotenv.env['DELETE_COMPLETED_DELIVERY_ENDPOINT'] ?? '';
 
-      if (!isCompleted) {
-        final planUrl = '$baseUrl$planilhaEx?excluir=1&id=$id&data=$today&timestamp=${Uri.encodeComponent(timestamp)}&entregador=${Uri.encodeComponent(entregador)}';
-        final planResp = await http.get(Uri.parse(planUrl)).timeout(const Duration(seconds: 10));
-        if (planResp.statusCode != 200) throw Exception('Erro planilha: ${planResp.statusCode}');
-      }
-
-      final apiUrl = isCompleted ? '$baseUrl$deleteComp' : '$baseUrl$deletePend';
-      final dbResp = await http.post(
-        Uri.parse(apiUrl),
-        headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-        body: {'id_pedido': id, 'nome_entregador': entregador, 'timestamp': timestamp},
-      ).timeout(const Duration(seconds: 10));
-
-      if (dbResp.statusCode != 200) throw Exception('DB: ${dbResp.statusCode}');
-      final dbData = jsonDecode(dbResp.body);
-      if (dbData['status'] != 'success') throw Exception(dbData['message']);
-
-      await _fetchDeliveries();
-      if (!mounted) return;
-      setState(() => _isLoading = false);
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Entrega excluída!')));
-    } catch (e) {
-      if (!mounted) return;
-      setState(() => _isLoading = false);
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Erro ao excluir: $e')));
+    if (baseUrl.isEmpty || deletePend.isEmpty || deleteComp.isEmpty) {
+      throw Exception('Endpoints de exclusão ausentes');
     }
+
+    // REMOVIDO: chamada à planilha (agora feita no PHP)
+    // if (!isCompleted) { ... }
+
+    final apiUrl = isCompleted ? '$baseUrl$deleteComp' : '$baseUrl$deletePend';
+    final dbResp = await http.post(
+      Uri.parse(apiUrl),
+      headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+      body: {
+        'id_pedido': id,
+        'nome_entregador': entregador,
+        'timestamp': timestamp,
+      },
+    ).timeout(const Duration(seconds: 30)); // Aumentar para 30s
+
+    if (dbResp.statusCode != 200) {
+      throw Exception('Erro no servidor: ${dbResp.statusCode}');
+    }
+
+    final dbData = jsonDecode(dbResp.body);
+    if (dbData['status'] != 'success') {
+      throw Exception(dbData['message'] ?? 'Erro desconhecido');
+    }
+
+    await _fetchDeliveries();
+    if (!mounted) return;
+
+    setState(() => _isLoading = false);
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: const Row(
+          children: [
+            Icon(Icons.delete_sweep, color: Colors.white),
+            SizedBox(width: 12),
+            Text('Entrega excluída com sucesso!'),
+          ],
+        ),
+        backgroundColor: danger,
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      ),
+    );
+  } catch (e) {
+    if (!mounted) return;
+    setState(() => _isLoading = false);
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Row(
+          children: [
+            const Icon(Icons.error, color: Colors.white),
+            const SizedBox(width: 12),
+            Expanded(child: Text('Erro ao excluir: $e')),
+          ],
+        ),
+        backgroundColor: danger,
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      ),
+    );
   }
+}
 
   Future<void> _selectDate(BuildContext context) async {
     final picked = await showDateRangePicker(
@@ -303,10 +369,22 @@ class _DeliveriesScreenState extends State<DeliveriesScreen>
       lastDate: DateTime(2028, 12, 31),
       builder: (ctx, child) => Theme(
         data: ThemeData.light().copyWith(
-          colorScheme: const ColorScheme.light(primary: primary, onPrimary: Colors.white, surface: Colors.white, onSurface: Colors.black87),
-          textButtonTheme: TextButtonThemeData(style: TextButton.styleFrom(foregroundColor: primary)),
+          colorScheme: const ColorScheme.light(
+            primary: primary,
+            onPrimary: Colors.white,
+            surface: Colors.white,
+            onSurface: Colors.black87,
+          ),
+          textButtonTheme: TextButtonThemeData(
+            style: TextButton.styleFrom(foregroundColor: primary),
+          ),
         ),
-        child: Center(child: ConstrainedBox(constraints: const BoxConstraints(maxWidth: 400, maxHeight: 600), child: child)),
+        child: Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 400, maxHeight: 600),
+            child: child,
+          ),
+        ),
       ),
     );
 
@@ -324,93 +402,337 @@ class _DeliveriesScreenState extends State<DeliveriesScreen>
   }
 
   void _showDeliveryDetails(BuildContext context, Map<String, dynamic> delivery) {
-    showDialog(
+    showModalBottomSheet(
       context: context,
-      builder: (_) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        backgroundColor: Colors.white,
-        title: Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            Text('#${delivery['id_pedido']} - Detalhes', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: dark)),
-            IconButton(icon: const Icon(Icons.close, color: Colors.grey), onPressed: () => Navigator.pop(context)),
-          ],
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => Container(
+        decoration: const BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
         ),
-        content: SingleChildScrollView(
+        padding: EdgeInsets.only(
+          bottom: MediaQuery.of(context).viewInsets.bottom,
+        ),
+        child: SingleChildScrollView(
           child: Column(
             mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              _buildDetailItem('Data/Hora', DateFormat('dd/MM - HH:mm').format(DateTime.parse(delivery['timestamp']))),
-              _buildDetailItem('Endereço', '${delivery['rua'] ?? 'N/A'}, ${delivery['numero'] ?? 'S/N'}\n${delivery['bairro'] ?? 'N/A'}\n${delivery['cidade'] ?? 'N/A'} - ${delivery['estado'] ?? ''}'),
-              if (delivery['cep'] != null && delivery['cep'].toString().trim().isNotEmpty) _buildDetailItem('CEP', delivery['cep']),
-              _buildDetailItem('Contato', delivery['telefone'] ?? 'N/A'),
+              // Handle bar
+              Container(
+                margin: const EdgeInsets.only(top: 12, bottom: 8),
+                width: 40,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: Colors.grey[300],
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+              
+              // Header
+              Padding(
+                padding: const EdgeInsets.fromLTRB(24, 8, 24, 16),
+                child: Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          colors: [primary.withOpacity(0.2), primary.withOpacity(0.1)],
+                        ),
+                        borderRadius: BorderRadius.circular(16),
+                      ),
+                      child: const Icon(Icons.description_outlined, color: primary, size: 28),
+                    ),
+                    const SizedBox(width: 16),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Pedido #${delivery['id_pedido']}',
+                            style: const TextStyle(
+                              fontSize: 22,
+                              fontWeight: FontWeight.bold,
+                              color: dark,
+                            ),
+                          ),
+                          Text(
+                            DateFormat('dd/MM/yyyy às HH:mm').format(DateTime.parse(delivery['timestamp'])),
+                            style: TextStyle(
+                              fontSize: 14,
+                              color: Colors.grey[600],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+
+              const Divider(height: 1),
+
+              // Content
+              Padding(
+                padding: const EdgeInsets.all(24),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _buildDetailSection(
+                      icon: Icons.location_on_outlined,
+                      iconColor: danger,
+                      title: 'Endereço de Entrega',
+                      content: '${delivery['rua'] ?? 'N/A'}, ${delivery['numero'] ?? 'S/N'}\n${delivery['bairro'] ?? 'N/A'}\n${delivery['cidade'] ?? 'N/A'} - ${delivery['estado'] ?? ''}',
+                    ),
+                    
+                    if (delivery['cep'] != null && delivery['cep'].toString().trim().isNotEmpty)
+                      _buildDetailSection(
+                        icon: Icons.pin_drop_outlined,
+                        iconColor: info,
+                        title: 'CEP',
+                        content: delivery['cep'],
+                      ),
+                    
+                    _buildDetailSection(
+                      icon: Icons.phone_outlined,
+                      iconColor: success,
+                      title: 'Contato',
+                      content: delivery['telefone'] ?? 'N/A',
+                    ),
+
+                    const SizedBox(height: 24),
+
+                    // Actions
+                    Row(
+                      children: [
+                        Expanded(
+                          child: _buildActionButton(
+                            onPressed: () => _showMapOptions(context, delivery),
+                            icon: Icons.map_outlined,
+                            label: 'Ver Mapa',
+                            color: info,
+                          ),
+                        ),
+                        if (delivery['telefone'] != null && 
+                            delivery['telefone'] != 'N/A' && 
+                            delivery['telefone'].toString().trim().isNotEmpty) ...[
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: _buildActionButton(
+                              onPressed: () async {
+                                final phone = delivery['telefone'].toString().replaceAll(RegExp(r'\D'), '');
+                                final formatted = phone.startsWith('55') ? phone : '55$phone';
+                                final uri = Uri.parse('tel:+$formatted');
+                                if (await canLaunchUrl(uri)) {
+                                  await launchUrl(uri);
+                                } else {
+                                  if (mounted) {
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      const SnackBar(content: Text('Não foi possível discar')),
+                                    );
+                                  }
+                                }
+                              },
+                              icon: Icons.phone,
+                              label: 'Ligar',
+                              color: success,
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ],
+                ),
+              ),
             ],
           ),
         ),
-        actions: [
-          TextButton(onPressed: () => _showMapOptions(context, delivery), style: TextButton.styleFrom(foregroundColor: info), child: const Row(mainAxisSize: MainAxisSize.min, children: [Icon(Icons.location_on), SizedBox(width: 4), Text('Mapa')])),
-          if (delivery['telefone'] != null && delivery['telefone'] != 'N/A' && delivery['telefone'].toString().trim().isNotEmpty)
-            TextButton(
-              onPressed: () async {
-                final phone = delivery['telefone'].toString().replaceAll(RegExp(r'\D'), '');
-                final formatted = phone.startsWith('55') ? phone : '55$phone';
-                final uri = Uri.parse('tel:+$formatted');
-                if (await canLaunchUrl(uri)) {
-                  await launchUrl(uri);
-                } else {
-                  if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Não foi possível discar')));
-                }
-              },
-              style: TextButton.styleFrom(foregroundColor: success),
-              child: const Row(mainAxisSize: MainAxisSize.min, children: [Icon(Icons.phone), SizedBox(width: 4), Text('Ligar')]),
+      ),
+    );
+  }
+
+  Widget _buildDetailSection({
+    required IconData icon,
+    required Color iconColor,
+    required String title,
+    required String content,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 20),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: iconColor.withOpacity(0.1),
+              borderRadius: BorderRadius.circular(12),
             ),
+            child: Icon(icon, color: iconColor, size: 22),
+          ),
+          const SizedBox(width: 16),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    color: Colors.grey[600],
+                    letterSpacing: 0.5,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  content,
+                  style: const TextStyle(
+                    fontSize: 15,
+                    color: dark,
+                    height: 1.4,
+                  ),
+                ),
+              ],
+            ),
+          ),
         ],
       ),
     );
   }
 
-  Widget _buildDetailItem(String title, String value) => Padding(
-        padding: const EdgeInsets.only(bottom: 12),
-        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text(title, style: const TextStyle(fontSize: 14, color: Colors.grey)),
-          const SizedBox(height: 4),
-          Text(value, style: const TextStyle(fontSize: 14, color: dark)),
-        ]),
-      );
+  Widget _buildActionButton({
+    required VoidCallback onPressed,
+    required IconData icon,
+    required String label,
+    required Color color,
+  }) {
+    return ElevatedButton.icon(
+      onPressed: onPressed,
+      icon: Icon(icon, size: 20),
+      label: Text(label),
+      style: ElevatedButton.styleFrom(
+        backgroundColor: color,
+        foregroundColor: Colors.white,
+        padding: const EdgeInsets.symmetric(vertical: 14),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(14),
+        ),
+        elevation: 0,
+      ),
+    );
+  }
 
   void _showMapOptions(BuildContext context, Map<String, dynamic> delivery) {
-    showDialog(
+    showModalBottomSheet(
       context: context,
-      builder: (_) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        backgroundColor: Colors.white,
-        title: Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            const Text('Abrir no Mapa', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: dark)),
-            IconButton(icon: const Icon(Icons.close, color: Colors.grey), onPressed: () => Navigator.pop(context)),
-          ],
+      backgroundColor: Colors.transparent,
+      builder: (_) => Container(
+        decoration: const BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
         ),
-        content: Column(
+        padding: const EdgeInsets.all(24),
+        child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            _buildMapOption(context, delivery, 'Google Maps', Icons.map, Colors.blue, () => _openGoogleMaps(delivery)),
-            const SizedBox(height: 8),
-            _buildMapOption(context, delivery, 'Waze', Icons.directions, Colors.blue, () => _openWaze(delivery)),
+            Container(
+              margin: const EdgeInsets.only(bottom: 20),
+              width: 40,
+              height: 4,
+              decoration: BoxDecoration(
+                color: Colors.grey[300],
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            const Text(
+              'Escolha o aplicativo',
+              style: TextStyle(
+                fontSize: 20,
+                fontWeight: FontWeight.bold,
+                color: dark,
+              ),
+            ),
+            const SizedBox(height: 24),
+            _buildMapOptionCard(
+              context,
+              delivery,
+              'Google Maps',
+              Icons.map,
+              const Color(0xFF4285F4),
+              () => _openGoogleMaps(delivery),
+            ),
+            const SizedBox(height: 12),
+            _buildMapOptionCard(
+              context,
+              delivery,
+              'Waze',
+              Icons.navigation,
+              const Color(0xFF33CCFF),
+              () => _openWaze(delivery),
+            ),
+            const SizedBox(height: 12),
           ],
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            style: TextButton.styleFrom(
-                foregroundColor: Colors.grey[700],
-                backgroundColor: Colors.white,
-                side: const BorderSide(color: Colors.grey),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8))),
-            child: const Text('Cancelar'),
-          ),
-        ],
+      ),
+    );
+  }
+
+  Widget _buildMapOptionCard(
+    BuildContext ctx,
+    Map<String, dynamic> delivery,
+    String title,
+    IconData icon,
+    Color iconColor,
+    VoidCallback onTap,
+  ) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(16),
+      child: Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          border: Border.all(color: Colors.grey[200]!),
+          borderRadius: BorderRadius.circular(16),
+        ),
+        child: Row(
+          children: [
+            Container(
+              width: 48,
+              height: 48,
+              decoration: BoxDecoration(
+                color: iconColor.withOpacity(0.1),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Icon(icon, color: iconColor, size: 24),
+            ),
+            const SizedBox(width: 16),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: const TextStyle(
+                      fontWeight: FontWeight.w600,
+                      fontSize: 16,
+                      color: dark,
+                    ),
+                  ),
+                  Text(
+                    'Abrir navegação',
+                    style: TextStyle(
+                      fontSize: 13,
+                      color: Colors.grey[600],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Icon(Icons.arrow_forward_ios, size: 16, color: Colors.grey[400]),
+          ],
+        ),
       ),
     );
   }
@@ -418,7 +740,11 @@ class _DeliveriesScreenState extends State<DeliveriesScreen>
   Future<void> _openGoogleMaps(Map<String, dynamic> d) async {
     final addr = _buildAddressString(d);
     if (addr.isEmpty) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Endereço incompleto')));
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Endereço incompleto')),
+        );
+      }
       return;
     }
     final enc = Uri.encodeComponent(addr);
@@ -435,7 +761,11 @@ class _DeliveriesScreenState extends State<DeliveriesScreen>
   Future<void> _openWaze(Map<String, dynamic> d) async {
     final addr = _buildAddressString(d);
     if (addr.isEmpty) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Endereço incompleto')));
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Endereço incompleto')),
+        );
+      }
       return;
     }
     final enc = Uri.encodeComponent(addr);
@@ -460,23 +790,99 @@ class _DeliveriesScreenState extends State<DeliveriesScreen>
     return '$rua $num, $bairro, $cidade - $estado, $cep, Brasil';
   }
 
-  Widget _buildMapOption(BuildContext ctx, Map<String, dynamic> delivery, String title, IconData icon, Color iconColor, VoidCallback onTap) => InkWell(
-        onTap: onTap,
-        child: Container(
-          padding: const EdgeInsets.all(12),
-          decoration: BoxDecoration(border: Border.all(color: Colors.grey[200]!), borderRadius: BorderRadius.circular(8)),
-          child: Row(
-            children: [
-              Container(width: 40, height: 40, decoration: BoxDecoration(color: Colors.blue[100], borderRadius: BorderRadius.circular(20)), child: Icon(icon, color: iconColor)),
-              const SizedBox(width: 12),
-              Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Text(title, style: const TextStyle(fontWeight: FontWeight.w500, color: dark)),
-                Text('Abrir no aplicativo', style: TextStyle(fontSize: 12, color: Colors.grey[500])),
-              ]),
-            ],
-          ),
+  Widget _buildModernDialog({
+    required IconData icon,
+    required Color iconColor,
+    required String title,
+    required String message,
+    required VoidCallback primaryAction,
+    required String primaryLabel,
+    VoidCallback? secondaryAction,
+    String? secondaryLabel,
+  }) {
+    return Dialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+      elevation: 0,
+      backgroundColor: Colors.transparent,
+      child: Container(
+        padding: const EdgeInsets.all(24),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(24),
         ),
-      );
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: iconColor.withOpacity(0.1),
+                shape: BoxShape.circle,
+              ),
+              child: Icon(icon, color: iconColor, size: 32),
+            ),
+            const SizedBox(height: 20),
+            Text(
+              title,
+              style: const TextStyle(
+                fontSize: 20,
+                fontWeight: FontWeight.bold,
+                color: dark,
+              ),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 12),
+            Text(
+              message,
+              style: TextStyle(
+                fontSize: 15,
+                color: Colors.grey[600],
+                height: 1.4,
+              ),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 24),
+            Row(
+              children: [
+                if (secondaryAction != null && secondaryLabel != null) ...[
+                  Expanded(
+                    child: OutlinedButton(
+                      onPressed: secondaryAction,
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: Colors.grey[700],
+                        side: BorderSide(color: Colors.grey[300]!),
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                      ),
+                      child: Text(secondaryLabel),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                ],
+                Expanded(
+                  child: ElevatedButton(
+                    onPressed: primaryAction,
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: iconColor,
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      elevation: 0,
+                    ),
+                    child: Text(primaryLabel),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 
   @override
   void dispose() {
@@ -490,28 +896,71 @@ class _DeliveriesScreenState extends State<DeliveriesScreen>
     final size = MediaQuery.of(context).size;
 
     return Scaffold(
-      backgroundColor: light,
+      backgroundColor: const Color(0xFFF5F7FA),
       appBar: AppBar(
         backgroundColor: Colors.white,
-        elevation: 1,
+        elevation: 0,
         leading: IconButton(
-          icon: const Icon(Icons.arrow_left, color: primary, size: 24),
-          onPressed: () => Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const DashboardScreen())),
+          icon: Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: primary.withOpacity(0.1),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: const Icon(Icons.arrow_back, color: primary, size: 20),
+          ),
+          onPressed: () => Navigator.pushReplacement(
+            context,
+            MaterialPageRoute(builder: (_) => const DashboardScreen()),
+          ),
           tooltip: 'Voltar ao Dashboard',
         ),
-        title: const Text('Painel de Entregas', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: dark)),
+        title: const Text(
+          'Entregas',
+          style: TextStyle(
+            fontSize: 22,
+            fontWeight: FontWeight.bold,
+            color: dark,
+            letterSpacing: -0.5,
+          ),
+        ),
         centerTitle: true,
         bottom: PreferredSize(
-          preferredSize: const Size.fromHeight(48),
+          preferredSize: const Size.fromHeight(56),
           child: Container(
-            decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: Colors.grey))),
+            margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            decoration: BoxDecoration(
+              color: Colors.grey[100],
+              borderRadius: BorderRadius.circular(16),
+            ),
             child: TabBar(
               controller: _tabController,
-              labelColor: primary,
+              labelColor: Colors.white,
               unselectedLabelColor: Colors.grey[600],
-              indicator: const UnderlineTabIndicator(borderSide: BorderSide(color: primary, width: 3), insets: EdgeInsets.symmetric(horizontal: 16)),
-              labelStyle: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
-              tabs: const [Tab(text: 'Pedidos do Dia'), Tab(text: 'Pedidos Concluídos')],
+              indicator: BoxDecoration(
+                gradient: const LinearGradient(
+                  colors: [primary, Color(0xFFFF9A56)],
+                ),
+                borderRadius: BorderRadius.circular(14),
+                boxShadow: [
+                  BoxShadow(
+                    color: primary.withOpacity(0.3),
+                    blurRadius: 8,
+                    offset: const Offset(0, 2),
+                  ),
+                ],
+              ),
+              indicatorSize: TabBarIndicatorSize.tab,
+              indicatorPadding: const EdgeInsets.all(4),
+              labelStyle: const TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.w600,
+                letterSpacing: 0.2,
+              ),
+              tabs: const [
+                Tab(text: 'Pendentes'),
+                Tab(text: 'Concluídos'),
+              ],
             ),
           ),
         ),
@@ -522,155 +971,213 @@ class _DeliveriesScreenState extends State<DeliveriesScreen>
               ? Center(
                   child: Column(
                     mainAxisAlignment: MainAxisAlignment.center,
-                    children: const [
-                      CircularProgressIndicator(strokeWidth: 4, valueColor: AlwaysStoppedAnimation(primary)),
-                      SizedBox(height: 16),
-                      Text('Carregando entregas...', style: TextStyle(fontSize: 16, color: Colors.grey)),
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(20),
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          shape: BoxShape.circle,
+                          boxShadow: [
+                            BoxShadow(
+                              color: primary.withOpacity(0.2),
+                              blurRadius: 20,
+                              spreadRadius: 5,
+                            ),
+                          ],
+                        ),
+                        child: const CircularProgressIndicator(
+                          strokeWidth: 3,
+                          valueColor: AlwaysStoppedAnimation(primary),
+                        ),
+                      ),
+                      const SizedBox(height: 24),
+                      const Text(
+                        'Carregando entregas...',
+                        style: TextStyle(
+                          fontSize: 16,
+                          color: Colors.grey,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
                     ],
                   ),
                 )
               : _errorMessage != null
                   ? Center(
                       child: Container(
-                        margin: const EdgeInsets.all(16),
-                        padding: const EdgeInsets.all(24),
-                        decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(12), boxShadow: const [BoxShadow(color: Colors.black12, blurRadius: 6, offset: Offset(0, 2))]),
+                        margin: const EdgeInsets.all(20),
+                        padding: const EdgeInsets.all(28),
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(24),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withOpacity(0.08),
+                              blurRadius: 20,
+                              offset: const Offset(0, 4),
+                            ),
+                          ],
+                        ),
                         child: Column(
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            const Icon(Icons.error, color: Colors.red, size: 48),
-                            const SizedBox(height: 16),
-                            const Text('Ocorreu um erro', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w500, color: dark)),
-                            const SizedBox(height: 8),
-                            Text(_errorMessage!, style: const TextStyle(fontSize: 16, color: Colors.grey), textAlign: TextAlign.center),
-                            const SizedBox(height: 24),
-                            ElevatedButton(
+                            Container(
+                              padding: const EdgeInsets.all(16),
+                              decoration: BoxDecoration(
+                                color: danger.withOpacity(0.1),
+                                shape: BoxShape.circle,
+                              ),
+                              child: const Icon(
+                                Icons.error_outline,
+                                color: danger,
+                                size: 48,
+                              ),
+                            ),
+                            const SizedBox(height: 20),
+                            const Text(
+                              'Ops! Algo deu errado',
+                              style: TextStyle(
+                                fontSize: 20,
+                                fontWeight: FontWeight.bold,
+                                color: dark,
+                              ),
+                            ),
+                            const SizedBox(height: 12),
+                            Text(
+                              _errorMessage!,
+                              style: TextStyle(
+                                fontSize: 15,
+                                color: Colors.grey[600],
+                                height: 1.4,
+                              ),
+                              textAlign: TextAlign.center,
+                            ),
+                            const SizedBox(height: 28),
+                            ElevatedButton.icon(
                               onPressed: () {
                                 _initializePrefs().then((_) {
                                   if (mounted) _fetchDeliveries();
                                 });
                               },
+                              icon: const Icon(Icons.refresh, size: 20),
+                              label: const Text('Tentar Novamente'),
                               style: ElevatedButton.styleFrom(
-                                  backgroundColor: primary,
-                                  foregroundColor: Colors.white,
-                                  padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
-                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24))),
-                              child: const Text('Tentar Novamente'),
+                                backgroundColor: primary,
+                                foregroundColor: Colors.white,
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 28,
+                                  vertical: 14,
+                                ),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(14),
+                                ),
+                                elevation: 0,
+                              ),
                             ),
                           ],
                         ),
                       ),
                     )
                   : Padding(
-                      padding: const EdgeInsets.all(12),
+                      padding: const EdgeInsets.all(16),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
+                          // Header Card
                           Container(
-                            padding: const EdgeInsets.all(16),
-                            decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(12), boxShadow: const [BoxShadow(color: Colors.black12, blurRadius: 6, offset: Offset(0, 2))]),
+                            padding: const EdgeInsets.all(20),
+                            decoration: BoxDecoration(
+                              gradient: LinearGradient(
+                                colors: [
+                                  Colors.white,
+                                  Colors.grey[50]!,
+                                ],
+                                begin: Alignment.topLeft,
+                                end: Alignment.bottomRight,
+                              ),
+                              borderRadius: BorderRadius.circular(20),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: Colors.black.withOpacity(0.05),
+                                  blurRadius: 15,
+                                  offset: const Offset(0, 4),
+                                ),
+                              ],
+                            ),
                             child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
                                 Row(
                                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                  crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
-                                    Flexible(
+                                    Expanded(
                                       child: Column(
                                         crossAxisAlignment: CrossAxisAlignment.start,
                                         children: [
-                                          Text('Olá, ${_prefs.getString('entregador') ?? ''}', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w600, color: dark), overflow: TextOverflow.ellipsis),
                                           Text(
-                                              _tabController.index == 0
-                                                  ? 'Todas as Entregas Pendentes'
-                                                  : 'Datas: ${_selectedDates.map((d) => DateFormat('dd/MM').format(d)).join(', ')}',
-                                              style: const TextStyle(fontSize: 14, color: Colors.grey),
-                                              overflow: TextOverflow.ellipsis),
+                                            'Olá, ${_prefs.getString('entregador') ?? ''}',
+                                            style: const TextStyle(
+                                              fontSize: 20,
+                                              fontWeight: FontWeight.bold,
+                                              color: dark,
+                                              letterSpacing: -0.5,
+                                            ),
+                                            overflow: TextOverflow.ellipsis,
+                                          ),
+                                          const SizedBox(height: 4),
+                                          Text(
+                                            _tabController.index == 0
+                                                ? 'Entregas do dia'
+                                                : 'Histórico: ${_selectedDates.map((d) => DateFormat('dd/MM').format(d)).join(', ')}',
+                                            style: TextStyle(
+                                              fontSize: 14,
+                                              color: Colors.grey[600],
+                                            ),
+                                            overflow: TextOverflow.ellipsis,
+                                          ),
                                         ],
                                       ),
                                     ),
-                                    Wrap(
-                                      spacing: 8,
-                                      runSpacing: 8,
+                                    Row(
                                       children: [
                                         if (_tabController.index == 1)
-                                          ElevatedButton(
+                                          _buildIconButton(
+                                            icon: Icons.calendar_today_rounded,
                                             onPressed: () => _selectDate(context),
-                                            style: ElevatedButton.styleFrom(
-                                                backgroundColor: Colors.grey[100],
-                                                foregroundColor: Colors.grey[700],
-                                                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
-                                                elevation: 0),
-                                            child: const Row(mainAxisSize: MainAxisSize.min, children: [Icon(Icons.calendar_today, size: 14), SizedBox(width: 6), Text('Filtrar', style: TextStyle(fontSize: 12))]),
+                                            tooltip: 'Filtrar datas',
                                           ),
-                                        ElevatedButton(
+                                        const SizedBox(width: 8),
+                                        _buildIconButton(
+                                          icon: Icons.refresh_rounded,
                                           onPressed: () {
                                             _initializePrefs().then((_) {
                                               if (mounted) _fetchDeliveries();
                                             });
                                           },
-                                          style: ElevatedButton.styleFrom(
-                                              backgroundColor: Colors.grey[100],
-                                              foregroundColor: Colors.grey[700],
-                                              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
-                                              elevation: 0),
-                                          child: const Row(mainAxisSize: MainAxisSize.min, children: [Icon(Icons.refresh, size: 14), SizedBox(width: 6), Text('Atualizar', style: TextStyle(fontSize: 12))]),
+                                          tooltip: 'Atualizar',
                                         ),
                                       ],
                                     ),
                                   ],
                                 ),
-                                const SizedBox(height: 12),
+                                const SizedBox(height: 20),
                                 Row(
                                   children: [
-                                    Flexible(
-                                      flex: 1,
-                                      child: Container(
-                                        constraints: const BoxConstraints(minWidth: 140, maxWidth: 200),
-                                        padding: const EdgeInsets.all(12),
-                                        decoration: BoxDecoration(color: Colors.blue[50], borderRadius: BorderRadius.circular(8)),
-                                        child: Row(
-                                          children: [
-                                            Container(
-                                                padding: const EdgeInsets.all(10),
-                                                decoration: BoxDecoration(color: Colors.blue[100], borderRadius: BorderRadius.circular(20)),
-                                                child: const Icon(Icons.local_shipping, color: Colors.blue, size: 20)),
-                                            const SizedBox(width: 12),
-                                            Expanded(
-                                                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                                              const Text('Total de Pedidos', style: TextStyle(fontSize: 12, color: Colors.grey), overflow: TextOverflow.ellipsis),
-                                              Text('${_tabController.index == 0 ? _pendingDeliveries.length : _completedDeliveries.length}', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: dark), overflow: TextOverflow.ellipsis)
-                                            ])),
-                                          ],
-                                        ),
+                                    Expanded(
+                                      child: _buildStatCard(
+                                        icon: Icons.local_shipping_rounded,
+                                        iconColor: info,
+                                        title: 'Total',
+                                        value: '${_tabController.index == 0 ? _pendingDeliveries.length : _completedDeliveries.length}',
                                       ),
                                     ),
                                     const SizedBox(width: 12),
-                                    Flexible(
-                                      flex: 1,
-                                      child: Container(
-                                        constraints: const BoxConstraints(minWidth: 140, maxWidth: 200),
-                                        padding: const EdgeInsets.all(12),
-                                        decoration: BoxDecoration(color: Colors.green[50], borderRadius: BorderRadius.circular(8)),
-                                        child: Row(
-                                          children: [
-                                            Container(
-                                                padding: const EdgeInsets.all(10),
-                                                decoration: BoxDecoration(color: Colors.green[100], borderRadius: BorderRadius.circular(20)),
-                                                child: const Icon(Icons.attach_money, color: Colors.green, size: 20)),
-                                            const SizedBox(width: 12),
-                                            Expanded(
-                                                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                                              const Text('Total a Receber', style: TextStyle(fontSize: 12, color: Colors.grey), overflow: TextOverflow.ellipsis),
-                                              Text(
-                                                  'R\$ ${NumberFormat.currency(locale: 'pt_BR', symbol: '', decimalDigits: 2).format(_tabController.index == 0 ? _pendingDeliveries.fold(0.0, (s, i) => s + i['taxa_entrega']) : _completedDeliveries.fold(0.0, (s, i) => s + i['taxa_entrega']))}',
-                                                  style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: dark),
-                                                  overflow: TextOverflow.ellipsis)
-                                            ])),
-                                          ],
-                                        ),
+                                    Expanded(
+                                      child: _buildStatCard(
+                                        icon: Icons.payments_rounded,
+                                        iconColor: success,
+                                        title: 'A Receber',
+                                        value: 'R\$ ${NumberFormat.currency(locale: 'pt_BR', symbol: '', decimalDigits: 2).format(_tabController.index == 0 ? _pendingDeliveries.fold(0.0, (s, i) => s + i['taxa_entrega']) : _completedDeliveries.fold(0.0, (s, i) => s + i['taxa_entrega']))}',
                                       ),
                                     ),
                                   ],
@@ -678,22 +1185,42 @@ class _DeliveriesScreenState extends State<DeliveriesScreen>
                               ],
                             ),
                           ),
-                          const SizedBox(height: 16),
+                          const SizedBox(height: 20),
                           Expanded(
                             child: TabBarView(
                               controller: _tabController,
                               children: [
                                 _pendingDeliveries.isEmpty
-                                    ? _buildEmptyState('Nenhuma entrega pendente', 'Você não tem entregas pendentes no momento.')
+                                    ? _buildEmptyState(
+                                        icon: Icons.inventory_2_outlined,
+                                        title: 'Nenhuma entrega pendente',
+                                        subtitle: 'Você está em dia com suas entregas!',
+                                      )
                                     : ListView.builder(
+                                        physics: const BouncingScrollPhysics(),
                                         itemCount: _pendingDeliveries.length,
-                                        itemBuilder: (_, i) => _buildDeliveryCard(context, _pendingDeliveries[i], false, i),
+                                        itemBuilder: (_, i) => _buildDeliveryCard(
+                                          context,
+                                          _pendingDeliveries[i],
+                                          false,
+                                          i,
+                                        ),
                                       ),
                                 _completedDeliveries.isEmpty
-                                    ? _buildEmptyState('Nenhuma entrega concluída', 'Nenhuma entrega encontrada para as datas selecionadas.')
+                                    ? _buildEmptyState(
+                                        icon: Icons.check_circle_outline,
+                                        title: 'Nenhuma entrega concluída',
+                                        subtitle: 'Selecione um período para visualizar',
+                                      )
                                     : ListView.builder(
+                                        physics: const BouncingScrollPhysics(),
                                         itemCount: _completedDeliveries.length,
-                                        itemBuilder: (_, i) => _buildDeliveryCard(context, _completedDeliveries[i], true, i),
+                                        itemBuilder: (_, i) => _buildDeliveryCard(
+                                          context,
+                                          _completedDeliveries[i],
+                                          true,
+                                          i,
+                                        ),
                                       ),
                               ],
                             ),
@@ -702,13 +1229,15 @@ class _DeliveriesScreenState extends State<DeliveriesScreen>
                       ),
                     ),
 
-          // BOTÃO QR CODE - FORA DO CHILDREN
+          // Floating QR Button
           DraggableFloatingButton(
             initialOffset: Offset(size.width - 80, size.height - 140 - kBottomNavigationBarHeight),
             onPressed: () async {
               if (!(Platform.isAndroid || Platform.isIOS)) {
                 ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('Escaneamento de QR Code não está disponível nesta plataforma.')),
+                  const SnackBar(
+                    content: Text('Escaneamento não disponível nesta plataforma.'),
+                  ),
                 );
                 return;
               }
@@ -720,10 +1249,19 @@ class _DeliveriesScreenState extends State<DeliveriesScreen>
 
               if (result == true) {
                 ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text('Pedido escaneado com sucesso!'),
-                    duration: Duration(seconds: 2),
-                    backgroundColor: Colors.green,
+                  SnackBar(
+                    content: Row(
+                      children: const [
+                        Icon(Icons.check_circle, color: Colors.white),
+                        SizedBox(width: 12),
+                        Text('Pedido escaneado com sucesso!'),
+                      ],
+                    ),
+                    backgroundColor: success,
+                    behavior: SnackBarBehavior.floating,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
                   ),
                 );
                 _fetchDeliveries();
@@ -737,150 +1275,388 @@ class _DeliveriesScreenState extends State<DeliveriesScreen>
     );
   }
 
-  Widget _buildEmptyState(String title, String subtitle) => Container(
-        padding: const EdgeInsets.all(32),
-        decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(12), boxShadow: const [BoxShadow(color: Colors.black12, blurRadius: 6, offset: Offset(0, 2))]),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Container(width: 96, height: 96, decoration: BoxDecoration(color: Colors.grey[100], borderRadius: BorderRadius.circular(48)), child: const Icon(Icons.local_shipping, color: Colors.grey, size: 48)),
-            const SizedBox(height: 16),
-            Text(title, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w500, color: dark)),
-            const SizedBox(height: 8),
-            Text(subtitle, style: const TextStyle(fontSize: 16, color: Colors.grey), textAlign: TextAlign.center),
+  Widget _buildIconButton({
+    required IconData icon,
+    required VoidCallback onPressed,
+    required String tooltip,
+  }) {
+    return Tooltip(
+      message: tooltip,
+      child: InkWell(
+        onTap: onPressed,
+        borderRadius: BorderRadius.circular(12),
+        child: Container(
+          padding: const EdgeInsets.all(10),
+          decoration: BoxDecoration(
+            color: Colors.grey[100],
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Icon(icon, size: 20, color: Colors.grey[700]),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildStatCard({
+    required IconData icon,
+    required Color iconColor,
+    required String title,
+    required String value,
+  }) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: iconColor.withOpacity(0.08),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: iconColor.withOpacity(0.2),
+          width: 1,
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: iconColor.withOpacity(0.15),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Icon(icon, color: iconColor, size: 20),
+          ),
+          const SizedBox(height: 12),
+          Text(
+            title,
+            style: TextStyle(
+              fontSize: 12,
+              color: Colors.grey[600],
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            value,
+            style: const TextStyle(
+              fontSize: 18,
+              fontWeight: FontWeight.bold,
+              color: dark,
+              letterSpacing: -0.5,
+            ),
+            overflow: TextOverflow.ellipsis,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildEmptyState({
+    required IconData icon,
+    required String title,
+    required String subtitle,
+  }) {
+    return Center(
+      child: Container(
+        margin: const EdgeInsets.all(20),
+        padding: const EdgeInsets.all(40),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(24),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.05),
+              blurRadius: 15,
+              offset: const Offset(0, 4),
+            ),
           ],
         ),
-      );
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(24),
+              decoration: BoxDecoration(
+                color: Colors.grey[100],
+                shape: BoxShape.circle,
+              ),
+              child: Icon(icon, color: Colors.grey[400], size: 56),
+            ),
+            const SizedBox(height: 24),
+            Text(
+              title,
+              style: const TextStyle(
+                fontSize: 20,
+                fontWeight: FontWeight.bold,
+                color: dark,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              subtitle,
+              style: TextStyle(
+                fontSize: 15,
+                color: Colors.grey[600],
+                height: 1.4,
+              ),
+              textAlign: TextAlign.center,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 
-  Widget _buildDeliveryCard(BuildContext ctx, Map<String, dynamic> d, bool completed, int idx) {
-    return AnimatedOpacity(
-      opacity: 1.0,
-      duration: const Duration(milliseconds: 300),
+  Widget _buildDeliveryCard(
+    BuildContext ctx,
+    Map<String, dynamic> d,
+    bool completed,
+    int idx,
+  ) {
+    return TweenAnimationBuilder<double>(
+      duration: Duration(milliseconds: 300 + (idx * 50)),
+      tween: Tween(begin: 0.0, end: 1.0),
+      builder: (context, value, child) {
+        return Transform.translate(
+          offset: Offset(0, 20 * (1 - value)),
+          child: Opacity(
+            opacity: value,
+            child: child,
+          ),
+        );
+      },
       child: Padding(
-        padding: const EdgeInsets.only(bottom: 8),
+        padding: const EdgeInsets.only(bottom: 12),
         child: InkWell(
           onTap: () => _showDeliveryDetails(ctx, d),
-          borderRadius: BorderRadius.circular(12),
-          child: AnimatedContainer(
-            duration: const Duration(milliseconds: 200),
+          borderRadius: BorderRadius.circular(20),
+          child: Container(
             decoration: BoxDecoration(
-              color: const Color(0xFF2C2C2E),
-              border: Border.all(color: Colors.black54),
-              borderRadius: BorderRadius.circular(12),
-              boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 8, offset: Offset(0, 3))],
+              gradient: LinearGradient(
+                colors: [
+                  cardBg,
+                  cardBg.withOpacity(0.95),
+                ],
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+              ),
+              borderRadius: BorderRadius.circular(20),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.15),
+                  blurRadius: 12,
+                  offset: const Offset(0, 4),
+                ),
+              ],
             ),
             child: Column(
               children: [
                 Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  padding: const EdgeInsets.all(18),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Flexible(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                              decoration: BoxDecoration(color: completed ? success.withAlpha(230) : primary.withAlpha(230), borderRadius: BorderRadius.circular(6)),
-                              child: Text('ID DO PEDIDO #${d['id_pedido']}', style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold), overflow: TextOverflow.ellipsis),
+                      Row(
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 12,
+                              vertical: 6,
                             ),
-                            const SizedBox(height: 8),
-                            Text('TAXA: R\$ ${NumberFormat.currency(locale: 'pt_BR', symbol: '', decimalDigits: 2).format(d['taxa_entrega'])}', style: const TextStyle(fontSize: 14, color: Colors.white70), overflow: TextOverflow.ellipsis),
-                            const SizedBox(height: 4),
-                            Text('BAIRRO: ${d['bairro'] ?? 'N/A'}', style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500, color: Colors.white), overflow: TextOverflow.ellipsis),
+                            decoration: BoxDecoration(
+                              gradient: LinearGradient(
+                                colors: completed
+                                    ? [success, success.withOpacity(0.8)]
+                                    : [primary, Color(0xFFFF9A56)],
+                              ),
+                              borderRadius: BorderRadius.circular(10),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: (completed ? success : primary).withOpacity(0.3),
+                                  blurRadius: 8,
+                                  offset: const Offset(0, 2),
+                                ),
+                              ],
+                            ),
+                            child: Text(
+                              '#${d['id_pedido']}',
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 14,
+                                fontWeight: FontWeight.bold,
+                                letterSpacing: 0.5,
+                              ),
+                            ),
+                          ),
+                          const Spacer(),
+                          if (completed)
+                            Container(
+                              padding: const EdgeInsets.all(6),
+                              decoration: BoxDecoration(
+                                color: success.withOpacity(0.2),
+                                shape: BoxShape.circle,
+                              ),
+                              child: const Icon(
+                                Icons.check_circle,
+                                color: success,
+                                size: 18,
+                              ),
+                            ),
+                        ],
+                      ),
+                      const SizedBox(height: 16),
+                      Row(
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.all(8),
+                            decoration: BoxDecoration(
+                              color: Colors.white.withOpacity(0.1),
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                            child: const Icon(
+                              Icons.location_on,
+                              color: Colors.white70,
+                              size: 18,
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  d['bairro'] ?? 'N/A',
+                                  style: const TextStyle(
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.w600,
+                                    color: Colors.white,
+                                  ),
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                                const SizedBox(height: 2),
+                                Text(
+                                  '${d['rua'] ?? 'N/A'}, ${d['numero'] ?? 'S/N'}',
+                                  style: TextStyle(
+                                    fontSize: 13,
+                                    color: Colors.white.withOpacity(0.7),
+                                  ),
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+                      Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: Colors.white.withOpacity(0.08),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Row(
+                          children: [
+                            const Icon(
+                              Icons.attach_money,
+                              color: success,
+                              size: 20,
+                            ),
+                            const SizedBox(width: 8),
+                            Text(
+                              'R\$ ${NumberFormat.currency(locale: 'pt_BR', symbol: '', decimalDigits: 2).format(d['taxa_entrega'])}',
+                              style: const TextStyle(
+                                fontSize: 18,
+                                fontWeight: FontWeight.bold,
+                                color: Colors.white,
+                                letterSpacing: -0.5,
+                              ),
+                            ),
                           ],
                         ),
                       ),
                     ],
                   ),
                 ),
-                Container(
-                  decoration: const BoxDecoration(color: Color(0xFF2C2C2E), borderRadius: BorderRadius.vertical(bottom: Radius.circular(12))),
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.end,
-                    children: [
-                      if (!completed) ...[
-                        IconButton(
-                          icon: const Icon(Icons.check, color: Colors.white),
+                if (!completed)
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: Colors.black.withOpacity(0.2),
+                      borderRadius: const BorderRadius.vertical(
+                        bottom: Radius.circular(20),
+                      ),
+                    ),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.end,
+                      children: [
+                        _buildCardActionButton(
+                          ctx,
+                          icon: Icons.check_rounded,
+                          color: success,
                           onPressed: () => showDialog(
                             context: ctx,
-                            builder: (_) => AlertDialog(
-                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                              backgroundColor: Colors.white,
-                              content: Column(
-                                mainAxisSize: MainAxisSize.min,
-                                children: const [
-                                  SizedBox(width: 52, height: 52, child: Icon(Icons.check, color: success, size: 26)),
-                                  SizedBox(height: 16),
-                                  Text('Confirmar Conclusão', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600, color: dark)),
-                                  SizedBox(height: 8),
-                                  Text('Deseja marcar esta entrega como concluída?', style: TextStyle(fontSize: 14, color: Colors.black54), textAlign: TextAlign.center)
-                                ],
-                              ),
-                              actions: [
-                                TextButton(onPressed: () => Navigator.pop(ctx), style: TextButton.styleFrom(foregroundColor: Colors.black87, backgroundColor: Colors.white, side: const BorderSide(color: Colors.black26), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8))), child: const Text('Cancelar')),
-                                TextButton(
-                                  onPressed: () {
-                                    Navigator.pop(ctx);
-                                    _markAsCompleted(d['id_pedido'], d['timestamp'], d['telefone']);
-                                  },
-                                  style: TextButton.styleFrom(foregroundColor: Colors.white, backgroundColor: success, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8))),
-                                  child: const Text('Confirmar'),
-                                ),
-                              ],
+                            builder: (_) => _buildModernDialog(
+                              icon: Icons.check_circle_outline,
+                              iconColor: success,
+                              title: 'Confirmar Conclusão',
+                              message: 'Deseja marcar esta entrega como concluída?',
+                              primaryAction: () {
+                                Navigator.pop(ctx);
+                                _markAsCompleted(d['id_pedido'], d['timestamp'], d['telefone']);
+                              },
+                              primaryLabel: 'Confirmar',
+                              secondaryAction: () => Navigator.pop(ctx),
+                              secondaryLabel: 'Cancelar',
                             ),
                           ),
-                          color: success,
-                          padding: const EdgeInsets.all(8),
-                          constraints: const BoxConstraints.tightFor(width: 40, height: 40),
-                          style: IconButton.styleFrom(backgroundColor: success.withAlpha(230)),
                         ),
                         const SizedBox(width: 8),
-                        IconButton(
-                          icon: const Icon(Icons.delete, color: Colors.white),
+                        _buildCardActionButton(
+                          ctx,
+                          icon: Icons.delete_outline_rounded,
+                          color: danger,
                           onPressed: () => showDialog(
                             context: ctx,
-                            builder: (_) => AlertDialog(
-                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                              backgroundColor: Colors.white,
-                              content: Column(
-                                mainAxisSize: MainAxisSize.min,
-                                children: const [
-                                  SizedBox(width: 52, height: 52, child: Icon(Icons.delete, color: danger, size: 26)),
-                                  SizedBox(height: 16),
-                                  Text('Confirmar Exclusão', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600, color: dark)),
-                                  SizedBox(height: 8),
-                                  Text('Tem certeza que deseja excluir esta entrega?', style: TextStyle(fontSize: 14, color: Colors.black54), textAlign: TextAlign.center)
-                                ],
-                              ),
-                              actions: [
-                                TextButton(onPressed: () => Navigator.pop(ctx), style: TextButton.styleFrom(foregroundColor: Colors.black87, backgroundColor: Colors.white, side: const BorderSide(color: Colors.black26), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8))), child: const Text('Cancelar')),
-                                TextButton(
-                                  onPressed: () {
-                                    Navigator.pop(ctx);
-                                    _deleteDelivery(d['id_pedido'], d['timestamp'], completed);
-                                  },
-                                  style: TextButton.styleFrom(foregroundColor: Colors.white, backgroundColor: danger, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8))),
-                                  child: const Text('Excluir'),
-                                ),
-                              ],
+                            builder: (_) => _buildModernDialog(
+                              icon: Icons.delete_outline,
+                              iconColor: danger,
+                              title: 'Confirmar Exclusão',
+                              message: 'Tem certeza que deseja excluir esta entrega?',
+                              primaryAction: () {
+                                Navigator.pop(ctx);
+                                _deleteDelivery(d['id_pedido'], d['timestamp'], completed);
+                              },
+                              primaryLabel: 'Excluir',
+                              secondaryAction: () => Navigator.pop(ctx),
+                              secondaryLabel: 'Cancelar',
                             ),
                           ),
-                          color: danger,
-                          padding: const EdgeInsets.all(8),
-                          constraints: const BoxConstraints.tightFor(width: 40, height: 40),
-                          style: IconButton.styleFrom(backgroundColor: danger.withAlpha(230)),
                         ),
                       ],
-                    ],
+                    ),
                   ),
-                ),
               ],
             ),
           ),
         ),
+      ),
+    );
+  }
+
+  Widget _buildCardActionButton(
+    BuildContext ctx, {
+    required IconData icon,
+    required Color color,
+    required VoidCallback onPressed,
+  }) {
+    return InkWell(
+      onTap: onPressed,
+      borderRadius: BorderRadius.circular(12),
+      child: Container(
+        padding: const EdgeInsets.all(10),
+        decoration: BoxDecoration(
+          color: color.withOpacity(0.2),
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Icon(icon, color: Colors.white, size: 22),
       ),
     );
   }
@@ -890,7 +1666,11 @@ class DraggableFloatingButton extends StatefulWidget {
   final VoidCallback onPressed;
   final Offset initialOffset;
 
-  const DraggableFloatingButton({super.key, required this.onPressed, this.initialOffset = const Offset(20, 20)});
+  const DraggableFloatingButton({
+    super.key,
+    required this.onPressed,
+    this.initialOffset = const Offset(20, 20),
+  });
 
   @override
   State<DraggableFloatingButton> createState() => _DraggableFloatingButtonState();
@@ -913,16 +1693,50 @@ class _DraggableFloatingButtonState extends State<DraggableFloatingButton> {
       child: GestureDetector(
         onPanUpdate: (details) {
           setState(() {
-            _offset = Offset(_offset.dx + details.delta.dx, _offset.dy + details.delta.dy);
+            _offset = Offset(
+              _offset.dx + details.delta.dx,
+              _offset.dy + details.delta.dy,
+            );
             final size = MediaQuery.of(context).size;
-            _offset = Offset(_offset.dx.clamp(0, size.width - 60), _offset.dy.clamp(0, size.height - 60 - kBottomNavigationBarHeight));
+            _offset = Offset(
+              _offset.dx.clamp(0, size.width - 60),
+              _offset.dy.clamp(0, size.height - 60 - kBottomNavigationBarHeight),
+            );
           });
         },
-        child: FloatingActionButton(
-          onPressed: widget.onPressed,
-          backgroundColor: _DeliveriesScreenState.primary,
-          elevation: 6,
-          child: const Icon(Icons.qr_code, color: Colors.white, size: 24),
+        child: Container(
+          decoration: BoxDecoration(
+            gradient: const LinearGradient(
+              colors: [_DeliveriesScreenState.primary, Color(0xFFFF9A56)],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+            ),
+            borderRadius: BorderRadius.circular(18),
+            boxShadow: [
+              BoxShadow(
+                color: _DeliveriesScreenState.primary.withOpacity(0.4),
+                blurRadius: 20,
+                offset: const Offset(0, 8),
+              ),
+            ],
+          ),
+          child: Material(
+            color: Colors.transparent,
+            child: InkWell(
+              onTap: widget.onPressed,
+              borderRadius: BorderRadius.circular(18),
+              child: Container(
+                width: 60,
+                height: 60,
+                alignment: Alignment.center,
+                child: const Icon(
+                  Icons.qr_code_scanner_rounded,
+                  color: Colors.white,
+                  size: 28,
+                ),
+              ),
+            ),
+          ),
         ),
       ),
     );

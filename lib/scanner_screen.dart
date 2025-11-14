@@ -13,58 +13,63 @@ import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-// =============================================
-// 1. FUNÇÃO DE NORMALIZAÇÃO DO ENTREGADOR
-// =============================================
+/// ---------------------------------------------------
+/// 1. Normaliza o nome do entregador (SEM lista fixa)
+/// ---------------------------------------------------
 String normalizeEntregadorName(String name) {
   if (name.isEmpty) return name;
 
-  // <-- LISTA EXATA dos entregadores aceitos pelo backend
-  const allowedNames = [
-    'Uber', 'Lala-Move', 'Gabriel', 'Leonardo', 'John Lenon', 'Reginaldo',
-    'Jeferson', 'Marcos Geraldo', 'Gilvan', 'Leandro', 'Eduardo', 'Marcelo',
-    'Retirada', 'Paulo', 'Diogo', 'Loggi', 'Felipe', 'Elcio', 'Denner',
-    'Bruno', 'Jaci', 'Kennedy', 'Rodrigo', 'Jose', 'Matheus', '-'
-  ];
+  // Remove acentos
+  String step = name
+      .replaceAll('á', 'a')
+      .replaceAll('à', 'a')
+      .replaceAll('ã', 'a')
+      .replaceAll('â', 'a')
+      .replaceAll('é', 'e')
+      .replaceAll('è', 'e')
+      .replaceAll('ê', 'e')
+      .replaceAll('í', 'i')
+      .replaceAll('ì', 'i')
+      .replaceAll('ó', 'o')
+      .replaceAll('ò', 'o')
+      .replaceAll('õ', 'o')
+      .replaceAll('ô', 'o')
+      .replaceAll('ú', 'u')
+      .replaceAll('ù', 'u')
+      .replaceAll('ç', 'c');
 
-  final normalized = name.trim().toLowerCase();
+  // Mantém apenas letras, hífen e espaços
+  step = step.replaceAll(RegExp(r'[^a-zA-Z\s\-]'), '');
 
-  // Busca por correspondência case-insensitive
-  for (final allowed in allowedNames) {
-    if (allowed.toLowerCase() == normalized) {
-      return allowed; // <-- Retorna o nome EXATO do backend
-    }
+  // Normaliza espaços e hífens
+  step = step
+      .replaceAll(RegExp(r'\s+'), ' ')      // múltiplos → 1
+      .replaceAll(RegExp(r'\s*-\s*'), '-') // hífen limpo
+      .trim();
+
+  if (step.isEmpty) return name;
+
+  // Força Lala-Move se aparecer "lala" + "move"
+  if (step.toLowerCase().contains('lala') && step.toLowerCase().contains('move')) {
+    return 'Lala-Move';
   }
 
-  // Fallback rápido para variações de "John Lenon"
-  if (normalized == 'john lenon') {
-    return 'John Lenon';
-  }
-
-  // Último recurso: Title case simples
-  return name.trim().split(' ').map((word) {
+  // Capitaliza cada palavra
+  return step.split(' ').map((word) {
     if (word.isEmpty) return word;
-    return word[0].toUpperCase() + word.substring(1).toLowerCase();
+    final lower = word.toLowerCase();
+    return lower[0].toUpperCase() + lower.substring(1);
   }).join(' ');
 }
 
-// =============================================
-// 2. SERVIÇO ESTÁTICO (OTIMIZADO)
-// =============================================
+/// ---------------------------------------------------
+/// 2. Serviço de entregas (SEM CACHE LOCAL)
+/// ---------------------------------------------------
 class DeliveryService {
-  // Cache para evitar chamadas duplicadas recentes
-  static final Map<String, DateTime> _checkCache = {};
-  static const _cacheTimeout = Duration(minutes: 5);
+  // REMOVIDO: static final Map<String, DateTime> _checkCache = {};
 
+  /// Sempre consulta a API para verificar duplicata
   static Future<bool> checkDuplicate(String id) async {
-    if (_checkCache.containsKey(id)) {
-      final cached = _checkCache[id]!;
-      if (DateTime.now().difference(cached) < _cacheTimeout) {
-        return true;
-      }
-      _checkCache.remove(id);
-    }
-
     final base = dotenv.env['API_BASE_URL'] ?? '';
     final ep = dotenv.env['CHECK_DUPLICATE_ENDPOINT'] ?? '';
     if (base.isEmpty || ep.isEmpty) return false;
@@ -74,12 +79,10 @@ class DeliveryService {
       final resp = await http.get(url).timeout(const Duration(seconds: 10));
       if (resp.body.isNotEmpty) {
         final data = jsonDecode(resp.body);
-        final isDup = data['status'] == 'success' && data['is_duplicate'] == true;
-        if (isDup) _checkCache[id] = DateTime.now();
-        return isDup;
+        return data['status'] == 'success' && data['is_duplicate'] == true;
       }
     } catch (e) {
-      if (kDebugMode) debugPrint('checkDuplicate erro (ignorado): $e');
+      if (kDebugMode) debugPrint('checkDuplicate erro: $e');
     }
     return false;
   }
@@ -105,13 +108,11 @@ class DeliveryService {
     };
 
     try {
-      final resp = await http.post(
-        url,
-        headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-        body: body,
-      ).timeout(const Duration(seconds: 10));
-
-      if (kDebugMode) debugPrint('REGISTER RESPONSE: ${resp.body}');
+      final resp = await http
+          .post(url,
+              headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+              body: body)
+          .timeout(const Duration(seconds: 10));
 
       if (resp.statusCode != 200 || resp.body.isEmpty) return null;
 
@@ -119,10 +120,7 @@ class DeliveryService {
       final success = data['status'] == 'success';
       final phone = data['telefone']?.toString();
 
-      return {
-        'success': success,
-        'phone': phone,
-      };
+      return {'success': success, 'phone': phone};
     } catch (e) {
       if (kDebugMode) debugPrint('registerDeliveryWithPhone erro: $e');
       return null;
@@ -130,55 +128,57 @@ class DeliveryService {
   }
 
   static Future<void> enviarMensagemSaiuPraEntrega(String? phoneNumber) async {
-    if (phoneNumber == null || phoneNumber == 'N/A' || phoneNumber.trim().isEmpty) {
-      if (kDebugMode) debugPrint('Número de telefone inválido ou não fornecido');
-      return;
-    }
-    const mensagem = "Vrummm! O seu pedido acabou de sair para entrega! - Mensagem Automática";
+    if (phoneNumber == null ||
+        phoneNumber == 'N/A' ||
+        phoneNumber.trim().isEmpty) return;
+
+    const mensagem =
+        "Vrummm! O seu pedido acabou de sair para entrega!\n\nMensagem automática da Ao Gosto Carnes.";
     final phone = phoneNumber.replaceAll(RegExp(r'\D'), '');
-    if (phone.isEmpty) {
-      if (kDebugMode) debugPrint('Número de telefone inválido após formatação');
-      return;
-    }
-    final messageApiUrl = dotenv.env['MESSAGE_API_URL'] ?? '';
-    final messageApiKey = dotenv.env['MESSAGE_API_KEY'] ?? '';
-    if (messageApiUrl.isEmpty || messageApiKey.isEmpty) {
-      if (kDebugMode) debugPrint('Erro: Variáveis de ambiente MESSAGE_API_URL ou MESSAGE_API_KEY não definidas');
-      return;
-    }
+    if (phone.isEmpty || phone.length < 10) return;
+
+    final messageApiUrl = dotenv.env['MESSAGE_API_URL'];
+    final messageApiToken = dotenv.env['MESSAGE_API_TOKEN'];
+    if (messageApiUrl == null ||
+        messageApiUrl.isEmpty ||
+        messageApiToken == null ||
+        messageApiToken.isEmpty) return;
+
     final payload = {"number": phone, "text": mensagem};
-    final headers = {"Content-Type": "application/json", "apikey": messageApiKey};
+    final headers = {
+      "Accept": "application/json",
+      "Content-Type": "application/json",
+      "token": messageApiToken,
+    };
 
     try {
-      final response = await http
-          .post(Uri.parse(messageApiUrl), headers: headers, body: jsonEncode(payload))
+      await http
+          .post(Uri.parse(messageApiUrl),
+              headers: headers, body: jsonEncode(payload))
           .timeout(const Duration(seconds: 10));
-      if (kDebugMode) debugPrint("Mensagem 'Saiu pra Entrega' enviada: ${response.body}");
-    } catch (error) {
-      if (kDebugMode) debugPrint("Erro ao enviar mensagem 'Saiu pra Entrega': $error");
+    } catch (e) {
+      if (kDebugMode) debugPrint("Erro ao enviar mensagem: $e");
     }
   }
 }
 
-// =============================================
-// 3. TELA DO SCANNER (OTIMIZADA)
-// =============================================
+/// ---------------------------------------------------
+/// 3. Tela do Scanner
+/// ---------------------------------------------------
 class ScannerScreen extends StatefulWidget {
   const ScannerScreen({super.key});
+
   @override
   State<ScannerScreen> createState() => _ScannerScreenState();
 }
 
-class _ScannerScreenState extends State<ScannerScreen> with TickerProviderStateMixin {
+class _ScannerScreenState extends State<ScannerScreen>
+    with TickerProviderStateMixin {
   MobileScannerController? _camCtrl;
-
   bool _processing = false;
   String? _entregador;
-
-  // Debounce otimizado
   Timer? _debounceTimer;
   String? _lastScannedId;
-
   late SharedPreferences _prefs;
   late AnimationController _scanLineCtrl;
   late AnimationController _pulseCtrl;
@@ -191,26 +191,17 @@ class _ScannerScreenState extends State<ScannerScreen> with TickerProviderStateM
 
     SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
 
-    // Animação da linha de scan
     _scanLineCtrl = AnimationController(
-      duration: const Duration(milliseconds: 1500),
-      vsync: this,
-    )..repeat(reverse: true);
+        duration: const Duration(milliseconds: 1500), vsync: this)
+      ..repeat(reverse: true);
+    _scanLineAnim =
+        CurvedAnimation(parent: _scanLineCtrl, curve: Curves.easeInOut);
 
-    _scanLineAnim = CurvedAnimation(
-      parent: _scanLineCtrl,
-      curve: Curves.easeInOut,
-    );
-
-    // Animação de pulso para o frame
     _pulseCtrl = AnimationController(
-      duration: const Duration(milliseconds: 2000),
-      vsync: this,
-    )..repeat(reverse: true);
-
+        duration: const Duration(milliseconds: 2000), vsync: this)
+      ..repeat(reverse: true);
     _pulseAnim = Tween<double>(begin: 0.0, end: 1.0).animate(
-      CurvedAnimation(parent: _pulseCtrl, curve: Curves.easeInOut),
-    );
+        CurvedAnimation(parent: _pulseCtrl, curve: Curves.easeInOut));
 
     _init();
   }
@@ -232,7 +223,6 @@ class _ScannerScreenState extends State<ScannerScreen> with TickerProviderStateM
 
     try {
       await _camCtrl?.dispose();
-
       _camCtrl = MobileScannerController(
         formats: [BarcodeFormat.qrCode],
         facing: CameraFacing.back,
@@ -241,10 +231,8 @@ class _ScannerScreenState extends State<ScannerScreen> with TickerProviderStateM
         detectionSpeed: DetectionSpeed.noDuplicates,
         autoStart: true,
       );
-
       if (mounted) setState(() {});
     } catch (e) {
-      if (kDebugMode) debugPrint('Erro ao iniciar câmera: $e');
       _showMessage('Erro ao iniciar câmera', isError: true);
     }
   }
@@ -255,24 +243,18 @@ class _ScannerScreenState extends State<ScannerScreen> with TickerProviderStateM
       SnackBar(
         content: Row(
           children: [
-            Icon(
-              isError ? Icons.error_outline : Icons.check_circle_outline,
-              color: Colors.white,
-            ),
+            Icon(isError ? Icons.error_outline : Icons.check_circle_outline,
+                color: Colors.white),
             const SizedBox(width: 12),
             Expanded(
-              child: Text(
-                txt,
-                style: const TextStyle(
-                  fontSize: 15,
-                  fontWeight: FontWeight.w500,
-                ),
-              ),
-            ),
+                child: Text(txt,
+                    style: const TextStyle(
+                        fontSize: 15, fontWeight: FontWeight.w500))),
           ],
         ),
+        backgroundColor:
+            isError ? Colors.red.shade600 : const Color(0xFFF28C38),
         behavior: SnackBarBehavior.floating,
-        backgroundColor: isError ? Colors.red.shade600 : const Color(0xFFF28C38),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
         duration: Duration(seconds: isError ? 3 : 2),
         margin: const EdgeInsets.all(16),
@@ -281,17 +263,16 @@ class _ScannerScreenState extends State<ScannerScreen> with TickerProviderStateM
   }
 
   Future<void> _onDetect(BarcodeCapture capture) async {
-    if (!mounted || _processing) return;
-    if (capture.barcodes.isEmpty) return;
+    if (!mounted || _processing || capture.barcodes.isEmpty) return;
 
     final raw = capture.barcodes.first.displayValue ?? '';
     final id = _extractId(raw);
     if (id == null || id.isEmpty) return;
 
-    // Debounce otimizado
+    // Debounce: evita múltiplos scans do mesmo QR em sequência rápida
     if (_lastScannedId == id) return;
-
     _lastScannedId = id;
+
     _debounceTimer?.cancel();
     _debounceTimer = Timer(const Duration(seconds: 2), () {
       _lastScannedId = null;
@@ -302,20 +283,13 @@ class _ScannerScreenState extends State<ScannerScreen> with TickerProviderStateM
 
   Future<void> _processQRCode(String id) async {
     setState(() => _processing = true);
-
-    HapticFeedback.mediumImpact();
-
     try {
       await _camCtrl?.stop();
-    } catch (e) {
-      if (kDebugMode) debugPrint('Erro ao parar câmera: $e');
-    }
+    } catch (_) {}
 
-    // Verificação de duplicata
-    final isDuplicate = await DeliveryService.checkDuplicate(id).timeout(
-      const Duration(milliseconds: 1500),
-      onTimeout: () => false,
-    );
+    // SEMPRE consulta a API (sem cache local)
+    final isDuplicate = await DeliveryService.checkDuplicate(id)
+        .timeout(const Duration(milliseconds: 1500), onTimeout: () => false);
 
     if (isDuplicate) {
       HapticFeedback.heavyImpact();
@@ -327,60 +301,35 @@ class _ScannerScreenState extends State<ScannerScreen> with TickerProviderStateM
 
     HapticFeedback.lightImpact();
     _showMessage('Pedido registrado com sucesso!');
-
     await Future.delayed(const Duration(milliseconds: 400));
     if (mounted) Navigator.pop(context, true);
 
-    // Processamento em background
     _backgroundTasks(id);
   }
 
   String? _extractId(String url) {
     try {
       final uri = Uri.tryParse(url);
-      if (uri != null && uri.queryParameters.containsKey('id')) {
-        return uri.queryParameters['id'];
-      }
-      return url.trim();
+      return uri?.queryParameters['id'] ?? url.trim();
     } catch (_) {
       return null;
     }
   }
 
   Future<void> _backgroundTasks(String id) async {
-    var entregador = _entregador;
-    if (entregador == null || entregador.isEmpty) {
-      if (kDebugMode) debugPrint('Entregador não definido');
-      return;
-    }
+    final entregador = _entregador;
+    if (entregador == null || entregador.isEmpty) return;
 
-    // <-- NORMALIZA O NOME ANTES DE ENVIAR
-    entregador = normalizeEntregadorName(entregador);
-    if (kDebugMode) debugPrint('Entregador normalizado: "$_entregador" → "$entregador"');
-
-    // (Opcional) Validação local antes do envio
-    const allowed = [
-      'Uber', 'Lala-Move', 'Gabriel', 'Leonardo', 'John Lenon', 'Reginaldo',
-      'Jeferson', 'Marcos Geraldo', 'Gilvan', 'Leandro', 'Eduardo', 'Marcelo',
-      'Retirada', 'Paulo', 'Diogo', 'Loggi', 'Felipe', 'Elcio', 'Denner',
-      'Bruno', 'Jaci', 'Kennedy', 'Rodrigo', 'Jose', 'Matheus', '-'
-    ];
-    if (!allowed.contains(entregador)) {
-      if (kDebugMode) debugPrint('Entregador não autorizado: $entregador');
-      return;
+    final normalized = normalizeEntregadorName(entregador);
+    if (kDebugMode) {
+      debugPrint('Entregador normalizado: "$entregador" → "$normalized"');
     }
 
     try {
-      final result = await DeliveryService.registerDeliveryWithPhone(id, entregador);
-      if (result == null || !result['success']) {
-        if (kDebugMode) debugPrint('Erro ao registrar entrega');
-        return;
+      final result = await DeliveryService.registerDeliveryWithPhone(id, normalized);
+      if (result?['success'] == true) {
+        await DeliveryService.enviarMensagemSaiuPraEntrega(result?['phone']);
       }
-
-      final String? phone = result['phone'] as String?;
-      await DeliveryService.enviarMensagemSaiuPraEntrega(phone);
-
-      if (kDebugMode) debugPrint('Background tasks concluídas');
     } catch (e) {
       if (kDebugMode) debugPrint('Background error: $e');
     }
@@ -394,7 +343,6 @@ class _ScannerScreenState extends State<ScannerScreen> with TickerProviderStateM
       DeviceOrientation.landscapeLeft,
       DeviceOrientation.landscapeRight,
     ]);
-
     _debounceTimer?.cancel();
     _scanLineCtrl.dispose();
     _pulseCtrl.dispose();
@@ -413,26 +361,19 @@ class _ScannerScreenState extends State<ScannerScreen> with TickerProviderStateM
         children: [
           // Câmera
           if (_camCtrl != null && (Platform.isAndroid || Platform.isIOS))
-            MobileScanner(
-              controller: _camCtrl!,
-              onDetect: _onDetect,
-            ),
+            MobileScanner(controller: _camCtrl!, onDetect: _onDetect),
 
           // Overlay escuro
           CustomPaint(
-            size: Size(size.width, size.height),
-            painter: ScannerOverlayPainter(),
-          ),
+              size: Size(size.width, size.height), painter: ScannerOverlayPainter()),
 
-          // Frame animado com pulso
+          // Frame animado (pulso)
           AnimatedBuilder(
             animation: _pulseAnim,
-            builder: (context, child) {
-              return CustomPaint(
-                size: Size(size.width, size.height),
-                painter: AnimatedFramePainter(_pulseAnim.value),
-              );
-            },
+            builder: (context, child) => CustomPaint(
+              size: Size(size.width, size.height),
+              painter: AnimatedFramePainter(_pulseAnim.value),
+            ),
           ),
 
           // Linha de scan animada
@@ -441,7 +382,6 @@ class _ScannerScreenState extends State<ScannerScreen> with TickerProviderStateM
             builder: (context, child) {
               final scanAreaSize = size.width * 0.7;
               final scanAreaTop = size.height * 0.3;
-
               return Positioned(
                 top: scanAreaTop + (_scanLineAnim.value * scanAreaSize),
                 left: size.width * 0.15,
@@ -449,20 +389,17 @@ class _ScannerScreenState extends State<ScannerScreen> with TickerProviderStateM
                 child: Container(
                   height: 3,
                   decoration: BoxDecoration(
-                    gradient: const LinearGradient(
-                      colors: [
-                        Colors.transparent,
-                        Color(0xFFF28C38),
-                        Color(0xFFF28C38),
-                        Colors.transparent,
-                      ],
-                    ),
+                    gradient: const LinearGradient(colors: [
+                      Colors.transparent,
+                      Color(0xFFF28C38),
+                      Color(0xFFF28C38),
+                      Colors.transparent
+                    ]),
                     boxShadow: [
                       BoxShadow(
-                        color: const Color(0xFFF28C38).withOpacity(0.6),
-                        blurRadius: 12,
-                        spreadRadius: 2,
-                      ),
+                          color: const Color(0xFFF28C38).withOpacity(0.6),
+                          blurRadius: 12,
+                          spreadRadius: 2)
                     ],
                   ),
                 ),
@@ -470,18 +407,14 @@ class _ScannerScreenState extends State<ScannerScreen> with TickerProviderStateM
             },
           ),
 
-          // Header com glassmorphism
+          // Header (glassmorphism)
           Positioned(
             top: 0,
             left: 0,
             right: 0,
             child: Container(
               padding: EdgeInsets.only(
-                top: safePadding.top + 8,
-                bottom: 16,
-                left: 8,
-                right: 8,
-              ),
+                  top: safePadding.top + 8, bottom: 16, left: 8, right: 8),
               decoration: BoxDecoration(
                 gradient: LinearGradient(
                   begin: Alignment.topCenter,
@@ -497,21 +430,19 @@ class _ScannerScreenState extends State<ScannerScreen> with TickerProviderStateM
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
                   _buildGlassButton(
-                    icon: Icons.close_rounded,
-                    onPressed: () => Navigator.pop(context),
-                  ),
+                      icon: Icons.close_rounded,
+                      onPressed: () => Navigator.pop(context)),
                   _buildGlassButton(
-                    icon: _camCtrl?.torchEnabled ?? false
-                        ? Icons.flash_on_rounded
-                        : Icons.flash_off_rounded,
-                    onPressed: () => _camCtrl?.toggleTorch(),
-                  ),
+                      icon: _camCtrl?.torchEnabled ?? false
+                          ? Icons.flash_on_rounded
+                          : Icons.flash_off_rounded,
+                      onPressed: () => _camCtrl?.toggleTorch()),
                 ],
               ),
             ),
           ),
 
-          // Instruções elegantes
+          // Instruções
           Positioned(
             top: size.height * 0.15,
             left: 0,
@@ -521,43 +452,38 @@ class _ScannerScreenState extends State<ScannerScreen> with TickerProviderStateM
                 Container(
                   padding: const EdgeInsets.all(16),
                   decoration: BoxDecoration(
-                    color: Colors.black.withOpacity(0.6),
-                    shape: BoxShape.circle,
-                  ),
-                  child: const Icon(
-                    Icons.qr_code_scanner_rounded,
-                    color: Color(0xFFF28C38),
-                    size: 48,
-                  ),
+                      color: Colors.black.withOpacity(0.6),
+                      shape: BoxShape.circle),
+                  child: const Icon(Icons.qr_code_scanner_rounded,
+                      color: Color(0xFFF28C38), size: 48),
                 ),
                 const SizedBox(height: 20),
                 Container(
                   margin: const EdgeInsets.symmetric(horizontal: 32),
-                  padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
                   decoration: BoxDecoration(
                     color: Colors.black.withOpacity(0.7),
                     borderRadius: BorderRadius.circular(30),
                     border: Border.all(
-                      color: const Color(0xFFF28C38).withOpacity(0.3),
-                      width: 1.5,
-                    ),
+                        color: const Color(0xFFF28C38).withOpacity(0.3),
+                        width: 1.5),
                   ),
                   child: const Text(
                     'Posicione o QR Code na área',
                     textAlign: TextAlign.center,
                     style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 16,
-                      fontWeight: FontWeight.w600,
-                      letterSpacing: 0.3,
-                    ),
+                        color: Colors.white,
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                        letterSpacing: 0.3),
                   ),
                 ),
               ],
             ),
           ),
 
-          // Loading overlay elegante
+          // Loading overlay
           if (_processing)
             Container(
               color: Colors.black.withOpacity(0.85),
@@ -568,9 +494,8 @@ class _ScannerScreenState extends State<ScannerScreen> with TickerProviderStateM
                     color: Colors.black.withOpacity(0.8),
                     borderRadius: BorderRadius.circular(24),
                     border: Border.all(
-                      color: const Color(0xFFF28C38).withOpacity(0.3),
-                      width: 2,
-                    ),
+                        color: const Color(0xFFF28C38).withOpacity(0.3),
+                        width: 2),
                   ),
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
@@ -585,23 +510,17 @@ class _ScannerScreenState extends State<ScannerScreen> with TickerProviderStateM
                         ),
                       ),
                       const SizedBox(height: 24),
-                      const Text(
-                        'Processando pedido...',
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontSize: 17,
-                          fontWeight: FontWeight.w600,
-                          letterSpacing: 0.3,
-                        ),
-                      ),
+                      const Text('Processando pedido...',
+                          style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 17,
+                              fontWeight: FontWeight.w600,
+                              letterSpacing: 0.3)),
                       const SizedBox(height: 8),
-                      Text(
-                        'Aguarde um momento',
-                        style: TextStyle(
-                          color: Colors.white.withOpacity(0.7),
-                          fontSize: 14,
-                        ),
-                      ),
+                      Text('Aguarde um momento',
+                          style: TextStyle(
+                              color: Colors.white.withOpacity(0.7),
+                              fontSize: 14)),
                     ],
                   ),
                 ),
@@ -612,18 +531,14 @@ class _ScannerScreenState extends State<ScannerScreen> with TickerProviderStateM
     );
   }
 
-  Widget _buildGlassButton({
-    required IconData icon,
-    required VoidCallback onPressed,
-  }) {
+  Widget _buildGlassButton(
+      {required IconData icon, required VoidCallback onPressed}) {
     return Container(
       decoration: BoxDecoration(
         color: Colors.white.withOpacity(0.15),
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(
-          color: Colors.white.withOpacity(0.2),
-          width: 1,
-        ),
+        border:
+            Border.all(color: Colors.white.withOpacity(0.2), width: 1),
       ),
       child: Material(
         color: Colors.transparent,
@@ -640,9 +555,9 @@ class _ScannerScreenState extends State<ScannerScreen> with TickerProviderStateM
   }
 }
 
-// =============================================
-// 4. OVERLAY PAINTER (MELHORADO)
-// =============================================
+/// ---------------------------------------------------
+/// 4. Overlay escuro com recorte
+/// ---------------------------------------------------
 class ScannerOverlayPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
@@ -667,12 +582,11 @@ class ScannerOverlayPainter extends CustomPainter {
   bool shouldRepaint(covariant CustomPainter old) => false;
 }
 
-// =============================================
-// 5. FRAME ANIMADO PAINTER
-// =============================================
+/// ---------------------------------------------------
+/// 5. Frame animado (cantos + brilho)
+/// ---------------------------------------------------
 class AnimatedFramePainter extends CustomPainter {
   final double pulseValue;
-
   AnimatedFramePainter(this.pulseValue);
 
   @override
@@ -691,9 +605,8 @@ class AnimatedFramePainter extends CustomPainter {
     const cornerLength = 40.0;
     const radius = 32.0;
 
-    void drawCorner(Offset start, Offset horizontal, Offset vertical) {
+    void drawCorner(Offset start, Offset h, Offset v) {
       final path = Path()..moveTo(start.dx, start.dy);
-
       if (start.dx < size.width / 2 && start.dy < size.height / 2) {
         path.lineTo(start.dx, start.dy + cornerLength);
         path.moveTo(start.dx, start.dy);
@@ -711,30 +624,21 @@ class AnimatedFramePainter extends CustomPainter {
         path.moveTo(start.dx, start.dy);
         path.lineTo(start.dx - cornerLength, start.dy);
       }
-
       canvas.drawPath(path, cornerPaint);
     }
 
-    drawCorner(
-      Offset(left, top + radius),
-      Offset(left + cornerLength, top + radius),
-      Offset(left, top + radius + cornerLength),
-    );
-    drawCorner(
-      Offset(left + scanAreaSize, top + radius),
-      Offset(left + scanAreaSize - cornerLength, top + radius),
-      Offset(left + scanAreaSize, top + radius + cornerLength),
-    );
-    drawCorner(
-      Offset(left, top + scanAreaSize - radius),
-      Offset(left + cornerLength, top + scanAreaSize - radius),
-      Offset(left, top + scanAreaSize - radius - cornerLength),
-    );
-    drawCorner(
-      Offset(left + scanAreaSize, top + scanAreaSize - radius),
-      Offset(left + scanAreaSize - cornerLength, top + scanAreaSize - radius),
-      Offset(left + scanAreaSize, top + scanAreaSize - radius - cornerLength),
-    );
+    drawCorner(Offset(left, top + radius),
+        Offset(left + cornerLength, top + radius),
+        Offset(left, top + radius + cornerLength));
+    drawCorner(Offset(left + scanAreaSize, top + radius),
+        Offset(left + scanAreaSize - cornerLength, top + radius),
+        Offset(left + scanAreaSize, top + radius + cornerLength));
+    drawCorner(Offset(left, top + scanAreaSize - radius),
+        Offset(left + cornerLength, top + scanAreaSize - radius),
+        Offset(left, top + scanAreaSize - radius - cornerLength));
+    drawCorner(Offset(left + scanAreaSize, top + scanAreaSize - radius),
+        Offset(left + scanAreaSize - cornerLength, top + scanAreaSize - radius),
+        Offset(left + scanAreaSize, top + scanAreaSize - radius - cornerLength));
 
     final glowPaint = Paint()
       ..color = const Color(0xFFF28C38).withOpacity(0.1 + (pulseValue * 0.1))
@@ -743,9 +647,8 @@ class AnimatedFramePainter extends CustomPainter {
       ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 15);
 
     final glowRect = RRect.fromRectAndRadius(
-      Rect.fromLTWH(left, top, scanAreaSize, scanAreaSize),
-      const Radius.circular(32),
-    );
+        Rect.fromLTWH(left, top, scanAreaSize, scanAreaSize),
+        const Radius.circular(32));
 
     canvas.drawRRect(glowRect, glowPaint);
   }

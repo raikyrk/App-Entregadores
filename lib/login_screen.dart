@@ -20,7 +20,7 @@ class LoginScreenState extends State<LoginScreen> {
   final _pinController = TextEditingController();
   String? _errorMessage;
   // Hash atual mantido no código conforme solicitado
-  static const String currentHash = 'v1';
+  static const String currentHash = 'v0';
 
   @override
   void initState() {
