@@ -66,62 +66,19 @@ class LoginScreenState extends State<LoginScreen> {
   }
 
   Future<void> _login() async {
-    setState(() {
-      _errorMessage = null;
-    });
+    // Esconde o teclado
+    FocusScope.of(context).unfocus();
 
-    final pin = _pinController.text.trim();
-    if (pin.isEmpty) {
-      setState(() {
-        _errorMessage = 'Por favor, insira o código.';
-      });
-      return;
-    }
+    // 1. Salva um nome falso no cache para o Dashboard não quebrar
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('entregador', 'Guilherme (Teste)');
 
-    for (int attempt = 1; attempt <= 3; attempt++) {
-      try {
-        await _writeLog('Tentativa $attempt - Validando PIN');
-        final baseUrl = dotenv.env['API_BASE_URL'] ?? '';
-        final validatePinEndpoint = dotenv.env['VALIDATE_PIN_ENDPOINT'] ?? '';
-        if (baseUrl.isEmpty || validatePinEndpoint.isEmpty) {
-          setState(() {
-            _errorMessage = 'Erro: Configuração de API ausente.';
-          });
-          await _writeLog('Erro: Variáveis de ambiente API_BASE_URL ou VALIDATE_PIN_ENDPOINT não definidas');
-          return;
-        }
-        final response = await http.post(
-          Uri.parse('$baseUrl$validatePinEndpoint'),
-          headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-          body: {'pin': pin},
-        ).timeout(const Duration(seconds: 10));
-
-        final data = jsonDecode(response.body);
-        if (data['status'] == 'success' && data['entregador'] != null) {
-          final prefs = await SharedPreferences.getInstance();
-          await prefs.setString('entregador', data['entregador']);
-          if (!mounted) return;
-          Navigator.pushReplacement(
-            context,
-            MaterialPageRoute(builder: (context) => const DashboardScreen()),
-          );
-          return;
-        } else {
-          setState(() {
-            _errorMessage = data['message'] ?? 'Código inválido.';
-          });
-          return;
-        }
-      } catch (e) {
-        if (attempt == 3) {
-          setState(() {
-            _errorMessage = 'Erro de conexão: $e';
-          });
-        }
-        await Future.delayed(const Duration(seconds: 1));
-      }
-    }
-    await _uploadLog();
+    // 2. Força a navegação direta para o Dashboard
+    if (!mounted) return;
+    Navigator.pushReplacement(
+      context,
+      MaterialPageRoute(builder: (context) => const DashboardScreen()),
+    );
   }
 
   Future<void> _verificarAtualizacao() async {

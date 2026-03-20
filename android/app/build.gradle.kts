@@ -1,11 +1,16 @@
 plugins {
     id("com.android.application")
+    // START: FlutterFire Configuration
+    id("com.google.gms.google-services")
+    // END: FlutterFire Configuration
     id("kotlin-android")
     id("dev.flutter.flutter-gradle-plugin")
 }
 
 android {
-    namespace = "com.aogosto.temp_project"
+    // ATENÇÃO: Quando for publicar, certifique-se de que este namespace e o applicationId 
+    // abaixo são exatamente os mesmos registrados no painel do Google Play Console.
+    namespace = "com.aogosto.temp_project" 
     compileSdk = 36
     ndkVersion = "27.0.12077973"
 
@@ -34,7 +39,9 @@ android {
 
     buildTypes {
         getByName("release") {
-            signingConfig = signingConfigs.getByName("debug") // Substitua por uma signingConfig real para a Play Store
+            // ATENÇÃO: No dia de gerar o App Bundle para a loja, você precisará 
+            // trocar "debug" pelo nome da sua signingConfig real (com as suas chaves de produção).
+            signingConfig = signingConfigs.getByName("debug") 
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(

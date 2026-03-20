@@ -1,0 +1,162 @@
+{
+  "project_info": {
+    "project_number": "932043130642",
+    "project_id": "ao-gosto-app-c0b31",
+    "storage_bucket": "ao-gosto-app-c0b31.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:932043130642:android:41d94b216dc98cd3e955cb",
+        "android_client_info": {
+          "package_name": "br.com.app.gpu2907388.gpu56a2b15e2a377eaf273ff3023830b24d"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDkXcfafUxaCIyqgminaGO4ZvPpPcIB7fw"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:932043130642:android:b1c7706e4a4c8363e955cb",
+        "android_client_info": {
+          "package_name": "com.aogosto.temp_project"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDkXcfafUxaCIyqgminaGO4ZvPpPcIB7fw"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:932043130642:android:45331efb6e4ae7a3e955cb",
+        "android_client_info": {
+          "package_name": "com.example.aogosto"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDkXcfafUxaCIyqgminaGO4ZvPpPcIB7fw"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:932043130642:android:a5f944b934093b94e955cb",
+        "android_client_info": {
+          "package_name": "com.example.aogostocarnes"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDkXcfafUxaCIyqgminaGO4ZvPpPcIB7fw"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:932043130642:android:4c5224c0a98290ece955cb",
+        "android_client_info": {
+          "package_name": "com.example.erp_painel"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDkXcfafUxaCIyqgminaGO4ZvPpPcIB7fw"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:932043130642:android:565eed9421eaccb5e955cb",
+        "android_client_info": {
+          "package_name": "com.example.kit_empresa"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDkXcfafUxaCIyqgminaGO4ZvPpPcIB7fw"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:932043130642:android:13ba7b14f2eb7f80e955cb",
+        "android_client_info": {
+          "package_name": "com.example.sistema_erp_adm"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDkXcfafUxaCIyqgminaGO4ZvPpPcIB7fw"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:932043130642:android:d49cc42e8993b199e955cb",
+        "android_client_info": {
+          "package_name": "com.fake.testpush"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDkXcfafUxaCIyqgminaGO4ZvPpPcIB7fw"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

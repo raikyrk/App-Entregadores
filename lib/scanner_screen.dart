@@ -3,6 +3,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io' show Platform;
+import 'package:cloud_firestore/cloud_firestore.dart';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -63,101 +64,53 @@ String normalizeEntregadorName(String name) {
 }
 
 /// ---------------------------------------------------
-/// 2. Serviço de entregas (SEM CACHE LOCAL)
+/// 2. Serviço de entregas (FIREBASE NATIVO)
 /// ---------------------------------------------------
 class DeliveryService {
-  // REMOVIDO: static final Map<String, DateTime> _checkCache = {};
-
-  /// Sempre consulta a API para verificar duplicata
+  
+  /// Verifica se o pedido já existe e se já foi bipado por alguém
   static Future<bool> checkDuplicate(String id) async {
-    final base = dotenv.env['API_BASE_URL'] ?? '';
-    final ep = dotenv.env['CHECK_DUPLICATE_ENDPOINT'] ?? '';
-    if (base.isEmpty || ep.isEmpty) return false;
-
-    final url = Uri.parse('$base$ep&id_pedido=$id');
     try {
-      final resp = await http.get(url).timeout(const Duration(seconds: 10));
-      if (resp.body.isNotEmpty) {
-        final data = jsonDecode(resp.body);
-        return data['status'] == 'success' && data['is_duplicate'] == true;
+      final doc = await FirebaseFirestore.instance.collection('pedidos').doc(id).get();
+      
+      if (!doc.exists) {
+        debugPrint('Pedido não encontrado no Firestore.');
+        return false; 
       }
+
+      final data = doc.data() as Map<String, dynamic>;
+      
+      // Se o pedido já tem um entregador atribuído E o status já for de saída/concluído, é duplicata!
+      final hasEntregador = data.containsKey('entregador') && data['entregador'] != null && data['entregador'].toString().isNotEmpty;
+      final statusAtual = data['status']?.toString().toLowerCase() ?? '';
+      
+      // Ajustado para a nomenclatura da Ao Gosto: "Saiu pra Entrega"
+      return hasEntregador && (statusAtual.contains('saiu') || statusAtual.contains('conclui'));
+
     } catch (e) {
       if (kDebugMode) debugPrint('checkDuplicate erro: $e');
+      return false;
     }
-    return false;
   }
 
-  static Future<Map<String, dynamic>?> registerDeliveryWithPhone(
-      String id, String entregador) async {
-    final base = dotenv.env['API_BASE_URL'] ?? '';
-    final ep = dotenv.env['ASSIGN_AND_SAVE_DELIVERY_ENDPOINT'] ?? '';
-    if (base.isEmpty || ep.isEmpty) return null;
-
-    final url = Uri.parse('$base$ep');
-    final body = {
-      'id_pedido': id,
-      'nome_entregador': entregador,
-      'timestamp': DateTime.now().toIso8601String(),
-      'bairro': 'N/A',
-      'rua': 'N/A',
-      'telefone': 'N/A',
-      'nome': 'N/A',
-      'pagamento': 'N/A',
-      'numero': 'N/A',
-      'cidade': 'N/A',
-    };
-
+  /// Atribui o pedido ao motoboy e muda o status para 'Saiu pra Entrega'
+  static Future<Map<String, dynamic>?> registerDeliveryWithPhone(String id, String entregador) async {
     try {
-      final resp = await http
-          .post(url,
-              headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-              body: body)
-          .timeout(const Duration(seconds: 10));
+      final docRef = FirebaseFirestore.instance.collection('pedidos').doc(id);
+      
+      // Usa o update para modificar apenas os campos necessários, mantendo o resto do pedido intacto
+      await docRef.update({
+        'entregador': entregador,
+        'status': 'Saiu pra Entrega', // 👈 Exatamente como está no seu banco!
+        'data_saida': FieldValue.serverTimestamp(), // Pega a hora exata do servidor do Google
+      });
 
-      if (resp.statusCode != 200 || resp.body.isEmpty) return null;
-
-      final data = jsonDecode(resp.body);
-      final success = data['status'] == 'success';
-      final phone = data['telefone']?.toString();
-
-      return {'success': success, 'phone': phone};
+      // Retornamos sucesso. A mensagem de WhatsApp será lidada pelo backend/Cloud Functions
+      return {'success': true, 'phone': 'N/A'};
+      
     } catch (e) {
-      if (kDebugMode) debugPrint('registerDeliveryWithPhone erro: $e');
+      if (kDebugMode) debugPrint('registerDelivery erro: $e');
       return null;
-    }
-  }
-
-  static Future<void> enviarMensagemSaiuPraEntrega(String? phoneNumber) async {
-    if (phoneNumber == null ||
-        phoneNumber == 'N/A' ||
-        phoneNumber.trim().isEmpty) return;
-
-    const mensagem =
-        "Vrummm! O seu pedido acabou de sair para entrega!\n\nMensagem automática da Ao Gosto Carnes.";
-    final phone = phoneNumber.replaceAll(RegExp(r'\D'), '');
-    if (phone.isEmpty || phone.length < 10) return;
-
-    final messageApiUrl = dotenv.env['MESSAGE_API_URL'];
-    final messageApiToken = dotenv.env['MESSAGE_API_TOKEN'];
-    if (messageApiUrl == null ||
-        messageApiUrl.isEmpty ||
-        messageApiToken == null ||
-        messageApiToken.isEmpty) return;
-
-    final payload = {"number": phone, "text": mensagem};
-    final headers = {
-      "Accept": "application/json",
-      "Content-Type": "application/json",
-      "token": messageApiToken,
-    };
-
-    try {
-      await http
-          .post(Uri.parse(messageApiUrl),
-              headers: headers, body: jsonEncode(payload))
-          .timeout(const Duration(seconds: 10));
-    } catch (e) {
-      if (kDebugMode) debugPrint("Erro ao enviar mensagem: $e");
     }
   }
 }
@@ -321,15 +274,10 @@ class _ScannerScreenState extends State<ScannerScreen>
     if (entregador == null || entregador.isEmpty) return;
 
     final normalized = normalizeEntregadorName(entregador);
-    if (kDebugMode) {
-      debugPrint('Entregador normalizado: "$entregador" → "$normalized"');
-    }
 
     try {
-      final result = await DeliveryService.registerDeliveryWithPhone(id, normalized);
-      if (result?['success'] == true) {
-        await DeliveryService.enviarMensagemSaiuPraEntrega(result?['phone']);
-      }
+      // Apenas registra no Firestore. O backend (Cloud Function) assumirá a burocracia do WhatsApp depois!
+      await DeliveryService.registerDeliveryWithPhone(id, normalized);
     } catch (e) {
       if (kDebugMode) debugPrint('Background error: $e');
     }

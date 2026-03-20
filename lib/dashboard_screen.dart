@@ -1,12 +1,17 @@
+// lib/dashboard_sreen.dart
+
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:convert';
 import 'dart:io' show File, FileMode;
+import 'dart:async'; // SPRINT 2: NECESSÁRIO PARA O STREAM DO GPS
+import 'package:location/location.dart';
 import 'package:intl/intl.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
+import 'package:url_launcher/url_launcher.dart';
 import 'main.dart';
 import 'login_screen.dart';
 import 'scanner_screen.dart';
@@ -29,6 +34,11 @@ class DashboardScreenState extends State<DashboardScreen> with SingleTickerProvi
   Map<String, String>? _cachedAverageTime;
   bool _isRefreshing = false;
 
+  // SPRINT 1 E 2: VARIÁVEIS DO GPS
+  final Location _location = Location();
+  LocationData? _currentLocation;
+  StreamSubscription<LocationData>? _locationSubscription; // SPRINT 2: CONTROLADOR DO LISTENER
+
   @override
   void initState() {
     super.initState();
@@ -41,12 +51,166 @@ class DashboardScreenState extends State<DashboardScreen> with SingleTickerProvi
       curve: Curves.easeInOut,
     );
     _loadCachedData();
+    
+    // Aguarda o ecrã ser desenhado para poder mostrar o pop-up, se necessário
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _iniciarRastreioInteligente(context);
+    });
   }
 
   @override
   void dispose() {
+    // SPRINT 2: CANCELA O GPS QUANDO A TELA FECHAR PARA POUPAR BATERIA E MEMÓRIA
+    _locationSubscription?.cancel();
     _pulseController.dispose();
     super.dispose();
+  }
+
+  // AVISO EM DESTAQUE OBRIGATÓRIO PARA O GOOGLE PLAY
+  Future<bool> _mostrarAvisoPrivacidade(BuildContext context) async {
+    return await showDialog<bool>(
+      context: context,
+      barrierDismissible: false, // Obriga o entregador a tomar uma decisão
+      builder: (BuildContext context) {
+        return AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: const Row(
+            children: [
+              Icon(Icons.location_on, color: Color(0xFFF28C38), size: 28),
+              SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  'Aviso de Localização', 
+                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18)
+                ),
+              ),
+            ],
+          ),
+          content: const Text(
+            'A aplicação Ao Gosto Delivery recolhe dados de localização para permitir o rastreamento das suas entregas em tempo real no mapa, mesmo quando a aplicação está fechada ou não está a ser utilizada.',
+            style: TextStyle(fontSize: 15, height: 1.4, color: Color(0xFF374151)),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('Recusar', style: TextStyle(color: Colors.grey)),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFFF28C38),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+              ),
+              onPressed: () => Navigator.of(context).pop(true),
+              child: const Text('Compreendi e Aceito', style: TextStyle(color: Colors.white)),
+            ),
+          ],
+        );
+      },
+    ) ?? false;
+  }
+
+  // FUNÇÃO DE RASTREIO BLINDADA PARA AS LOJAS
+  Future<void> _iniciarRastreioInteligente(BuildContext context) async {
+    bool serviceEnabled;
+    PermissionStatus permissionGranted;
+
+    // 1. Verifica se o GPS do telemóvel está ligado fisicamente
+    serviceEnabled = await _location.serviceEnabled();
+    if (!serviceEnabled) {
+      serviceEnabled = await _location.requestService();
+      if (!serviceEnabled) {
+        await _writeLog('GPS: Serviço desativado.');
+        return;
+      }
+    }
+
+    // 2. Verifica se a aplicação tem permissão
+    permissionGranted = await _location.hasPermission();
+    if (permissionGranted == PermissionStatus.denied) {
+      
+      // 3. O SEGREDO DO GOOGLE PLAY: Mostrar o nosso aviso ANTES do nativo
+      bool aceitouAviso = await _mostrarAvisoPrivacidade(context);
+      
+      if (!aceitouAviso) {
+        await _writeLog('GPS: O entregador recusou o aviso de privacidade.');
+        return; // Se recusou, não insistimos para não gerar bloqueio do sistema
+      }
+
+      // 4. Só agora pedimos a permissão nativa do iOS/Android
+      permissionGranted = await _location.requestPermission();
+      if (permissionGranted != PermissionStatus.granted && permissionGranted != PermissionStatus.grantedLimited) {
+        await _writeLog('GPS: Permissão nativa negada.');
+        return;
+      }
+    }
+
+    // O resto da inteligência (Filtro de bateria e disparo para o Python) mantém-se intacto
+    try {
+      _currentLocation = await _location.getLocation();
+      debugPrint('📍 GPS INICIADO: Lat ${_currentLocation?.latitude}, Lng ${_currentLocation?.longitude}');
+
+      await _location.changeSettings(
+        accuracy: LocationAccuracy.high, 
+        interval: 5000,                 
+        distanceFilter: 10,              
+      );
+
+      _locationSubscription = _location.onLocationChanged.listen((LocationData currentLocation) {
+        if (mounted) {
+          setState(() {
+            _currentLocation = currentLocation;
+          });
+          
+          debugPrint('🛵 ESTAFETA MOVEU! Nova Lat: ${currentLocation.latitude}, Lng: ${currentLocation.longitude}');
+          _enviarLocalizacaoParaPython(currentLocation);
+        }
+      });
+
+    } catch (e) {
+      debugPrint('Erro ao configurar GPS: $e');
+      await _writeLog('Erro GPS Inteligente: $e');
+    }
+  }
+
+  // SPRINT 3: ENVIO PARA O BACKEND PYTHON
+  Future<void> _enviarLocalizacaoParaPython(LocationData loc) async {
+    try {
+      final entregador = _cachedEntregadorName ?? await _getEntregadorName();
+      
+      // Pegamos as URLs do .env (você vai precisar criar essa chave lá depois)
+      final baseUrl = dotenv.env['API_BASE_URL'] ?? '';
+      final rastreioEndpoint = dotenv.env['UPDATE_LOCATION_ENDPOINT'] ?? 'api/rastreio/atualizar';
+      
+      if (baseUrl.isEmpty) return;
+
+      final url = Uri.parse(rastreioEndpoint);
+      
+      // Montamos um Payload leve e direto ao ponto
+      final payload = {
+        'entregador': entregador,
+        'lat': loc.latitude,
+        'lng': loc.longitude,
+        'heading': loc.heading, // A direção que ele está olhando (ótimo para virar o ícone da moto no mapa!)
+        'speed': loc.speed,     // Velocidade atual
+        'timestamp': DateTime.now().toIso8601String(),
+      };
+
+      // Disparamos para o Python sem esperar a resposta (Fire and Forget) para não travar o app
+      http.post(
+        url,
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode(payload),
+      ).catchError((e) {
+        // Se a internet do motoboy cair na rua, a gente só ignora e tenta na próxima coordenada
+        debugPrint('Erro silencioso de rede no GPS: $e');
+        return http.Response('', 500); 
+      });
+
+      debugPrint('🚀 [SPRINT 3] Coordenada enviada pro Python! ($entregador)');
+
+    } catch (e) {
+      debugPrint('Erro ao montar pacote de GPS: $e');
+    }
   }
 
   Future<void> _loadCachedData() async {
@@ -335,6 +499,72 @@ class DashboardScreenState extends State<DashboardScreen> with SingleTickerProvi
     );
   }
 
+  // ABRIR POLÍTICA DE PRIVACIDADE
+  Future<void> _abrirPoliticaPrivacidade() async {
+    // Altere para a URL real da página que você vai criar no site da Ao Gosto
+    final Uri url = Uri.parse('https://aogosto.com.br/privacidade-entregadores');
+    if (!await launchUrl(url, mode: LaunchMode.externalApplication)) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Não foi possível abrir a Política de Privacidade.')),
+        );
+      }
+    }
+  }
+
+  // EXCLUIR CONTA (MANDATÓRIO APPLE/GOOGLE)
+  Future<void> _solicitarExclusaoConta(BuildContext context) async {
+    showDialog(
+      context: context,
+      builder: (BuildContext dialogContext) {
+        return AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: const Text('Excluir Conta', style: TextStyle(color: Colors.red, fontWeight: FontWeight.bold)),
+          content: const Text(
+            'Tem certeza que deseja solicitar a exclusão da sua conta e de todos os seus dados? Esta ação não pode ser desfeita.',
+            style: TextStyle(height: 1.4),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('Cancelar', style: TextStyle(color: Colors.grey)),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.red,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+              ),
+              onPressed: () async {
+                Navigator.of(dialogContext).pop();
+                
+                // 1. Aqui você faria um http.post para o seu backend excluir os dados do entregador
+                // await http.post(Uri.parse('$baseUrl/api/entregador/excluir'), body: {'entregador': _cachedEntregadorName});
+                
+                // 2. Limpa os dados locais e desloga
+                final prefs = await SharedPreferences.getInstance();
+                await prefs.remove('entregador');
+                if (mounted) {
+                  Navigator.pushAndRemoveUntil(
+                    context,
+                    MaterialPageRoute(builder: (context) => const LoginScreen()),
+                    (route) => false,
+                  );
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('Solicitação enviada. Seus dados serão excluídos.'),
+                      backgroundColor: Colors.green,
+                    ),
+                  );
+                }
+              },
+              child: const Text('Sim, Excluir', style: TextStyle(color: Colors.white)),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
   Widget _buildWelcomeCard() {
     return Container(
       decoration: BoxDecoration(
@@ -426,10 +656,15 @@ class DashboardScreenState extends State<DashboardScreen> with SingleTickerProvi
               ),
               const SizedBox(width: 12),
               // Menu de perfil
+              // Menu de perfil
               PopupMenuButton<String>(
                 onSelected: (value) async {
                   if (value == 'upload_report') {
                     await _handlePhotoUpload();
+                  } else if (value == 'privacy_policy') {
+                    await _abrirPoliticaPrivacidade();
+                  } else if (value == 'delete_account') {
+                    await _solicitarExclusaoConta(context);
                   }
                 },
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
@@ -441,22 +676,48 @@ class DashboardScreenState extends State<DashboardScreen> with SingleTickerProvi
                         Container(
                           padding: const EdgeInsets.all(8),
                           decoration: BoxDecoration(
-                            gradient: const LinearGradient(
-                              colors: [Color(0xFFF28C38), Color(0xFFF5A623)],
-                            ),
+                            gradient: const LinearGradient(colors: [Color(0xFFF28C38), Color(0xFFF5A623)]),
                             borderRadius: BorderRadius.circular(8),
                           ),
                           child: const Icon(Icons.camera_alt, color: Colors.white, size: 18),
                         ),
                         const SizedBox(width: 12),
-                        const Text(
-                          'Enviar Relatório',
-                          style: TextStyle(
-                            fontSize: 15,
-                            fontWeight: FontWeight.w500,
-                            fontFamily: 'Poppins',
+                        const Text('Enviar Relatório', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w500, fontFamily: 'Poppins')),
+                      ],
+                    ),
+                  ),
+                  const PopupMenuDivider(),
+                  PopupMenuItem<String>(
+                    value: 'privacy_policy',
+                    child: Row(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.all(8),
+                          decoration: BoxDecoration(
+                            color: Colors.blue.shade50,
+                            borderRadius: BorderRadius.circular(8),
                           ),
+                          child: Icon(Icons.privacy_tip, color: Colors.blue.shade600, size: 18),
                         ),
+                        const SizedBox(width: 12),
+                        const Text('Política de Privacidade', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w500, fontFamily: 'Poppins')),
+                      ],
+                    ),
+                  ),
+                  PopupMenuItem<String>(
+                    value: 'delete_account',
+                    child: Row(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.all(8),
+                          decoration: BoxDecoration(
+                            color: Colors.red.shade50,
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Icon(Icons.person_off, color: Colors.red.shade600, size: 18),
+                        ),
+                        const SizedBox(width: 12),
+                        const Text('Excluir Conta', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w500, color: Colors.red, fontFamily: 'Poppins')),
                       ],
                     ),
                   ),
