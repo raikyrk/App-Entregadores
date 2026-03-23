@@ -57,5 +57,9 @@
     <true/>
     <key>UIApplicationSupportsIndirectInputEvents</key>
     <true/>
+    <key>NSLocationWhenInUseUsageDescription</key>
+	<string>Precisamos do seu GPS para mostrar sua localização no mapa de entregas.</string>
+	<key>NSLocationAlwaysUsageDescription</key>
+	<string>Precisamos do seu GPS para rastrear as entregas em segundo plano.</string>
 </dict>
 </plist>

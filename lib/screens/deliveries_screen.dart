@@ -14,7 +14,7 @@ import 'dart:async';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import '../main.dart';
 import '../dashboard_screen.dart';
-import 'screens/scanner_screen.dart';
+import 'scanner_screen.dart';
 
 @immutable
 class DeliveriesScreen extends StatefulWidget {

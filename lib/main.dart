@@ -2,10 +2,10 @@ import 'package:flutter/material.dart';
 import 'firebase_options.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:firebase_core/firebase_core.dart'; 
-import 'login_screen.dart';
 import 'dashboard_screen.dart';
-import 'scanner_screen.dart';
-import 'deliveries_screen.dart';
+import 'screens/scanner_screen.dart';
+import 'screens/deliveries_screen.dart';
+import 'screens/login_screen.dart';
 
 // Widget personalizado para botões com animação de escala
 class AnimatedScaleButton extends StatefulWidget {
