@@ -28,4 +28,4 @@ Sistemas de delivery genéricos não oferecem o nível de controle SLA e roteiri
 * **Cache Local:** `shared_preferences` para resiliência offline de dados estáticos do perfil.
 
 ## 👨‍💻 Autor
-Desenvolvido por **Guilherme Trajano** ([@trajanoo93](https://github.com/trajanoo93)).
+Desenvolvido por ** Raiky Câmara ** ([@raikyrk](https://github.com/raikyrk)) **Guilherme Trajano** ([@trajanoo93](https://github.com/trajanoo93)).

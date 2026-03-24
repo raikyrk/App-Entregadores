@@ -1,6 +1,6 @@
-name: aogosto_carnes
-description: A new Flutter project.
-version: 1.2.0+2
+name: aogosto_entregador
+description: Aplicativo oficial de logística, roteirização inteligente e painel financeiro para os entregadores parceiros da Ao Gosto.
+version: 2.0.0+1
 
 environment:
   sdk: ">=3.0.0 <4.0.0"
@@ -35,27 +35,30 @@ dependencies:
   firebase_storage: 13.1.0
   latlong2: ^0.9.0
   flutter_map: ^6.0.1
-
   geolocator: ^11.0.0 
-
+  lottie: ^3.1.0 # 👉 Lottie bonitinho aqui
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^6.0.0
-  flutter_launcher_icons: ^0.14.4
+  flutter_launcher_icons: ^0.14.4 # 👉 Biblioteca de ícones no lugar certo
 
 flutter:
   uses-material-design: true
   assets:
     - assets/
     - assets/go-icon.png
+    - assets/animations/ # 👉 DECLARAÇÃO DA PASTA DO LOTTIE!
     - .env
 
+# ==========================================================
+# 👉 CONFIGURAÇÃO DO ÍCONE (Apenas UM bloco agora)
+# ==========================================================
 flutter_launcher_icons:
   android: "launcher_icon"
-  ios: false
+  ios: true # Habilita para iOS também
   image_path: "assets/go-icon.png"
   min_sdk_android: 21
-  adaptive_icon_background: "#FFFFFF"
+  adaptive_icon_background: "#1E1E1E" # Fundo escuro (Slate) pra logo "Go" brilhar
   adaptive_icon_foreground: "assets/go-icon.png"

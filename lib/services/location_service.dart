@@ -1,104 +1,84 @@
 import 'dart:async';
-import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
-import 'package:flutter/foundation.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 class LocationService {
-  static StreamSubscription<Position>? _positionStream;
   static bool isTracking = false;
+  
+  // 👉 AS TRÊS PEÇAS DA NOVA ARQUITETURA
+  static StreamSubscription<Position>? _positionStream;
+  static Timer? _syncTimer; // O Maestro Inquebrável
+  static Position? _lastPosition; // A Memória Cache
 
-  /// Inicia o rastreio blindado e envia para o Firestore
   static Future<void> startTracking() async {
     if (isTracking) return;
 
-    bool serviceEnabled;
-    LocationPermission permission;
+    bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+    if (!serviceEnabled) return;
 
-    // 1. Verifica se o GPS do celular está ligado fisicamente
-    serviceEnabled = await Geolocator.isLocationServiceEnabled();
-    if (!serviceEnabled) {
-      debugPrint('GPS Desativado no aparelho.');
-      return;
-    }
-
-    // 2. Verifica e pede permissões
-    permission = await Geolocator.checkPermission();
+    LocationPermission permission = await Geolocator.checkPermission();
     if (permission == LocationPermission.denied) {
       permission = await Geolocator.requestPermission();
-      if (permission == LocationPermission.denied) {
-        debugPrint('Permissão de GPS negada.');
-        return;
-      }
+      if (permission == LocationPermission.denied) return;
     }
 
-    if (permission == LocationPermission.deniedForever) {
-      debugPrint('Permissões negadas permanentemente.');
-      return;
-    }
-
-    // Pega o nome do entregador logado para saber em qual documento salvar
     final prefs = await SharedPreferences.getInstance();
-    final entregadorNome = prefs.getString('entregador') ?? 'Desconhecido';
-
-    // 3. Configura o "Foreground Service" (A notificação que mantém o app vivo)
-    late LocationSettings locationSettings;
-
-    if (defaultTargetPlatform == TargetPlatform.android) {
-      locationSettings = AndroidSettings(
-        accuracy: LocationAccuracy.high,
-        distanceFilter: 10, // Só atualiza se ele andar 10 metros (poupa bateria e Firestore)
-        forceLocationManager: true,
-        // Isso aqui é a mágica que impede o Android de matar o App no bolso!
-        foregroundNotificationConfig: const ForegroundNotificationConfig(
-          notificationText: "Ao Gosto Delivery rodando em segundo plano.",
-          notificationTitle: "Rastreio Ativo",
-          enableWakeLock: true,
-        ),
-      );
-    } else if (defaultTargetPlatform == TargetPlatform.iOS) {
-      locationSettings = AppleSettings(
-        accuracy: LocationAccuracy.high,
-        activityType: ActivityType.automotiveNavigation,
-        distanceFilter: 10,
-        pauseLocationUpdatesAutomatically: false,
-        showBackgroundLocationIndicator: true, // Mostra a pílula azul no iPhone
-      );
-    } else {
-      locationSettings = const LocationSettings(
-        accuracy: LocationAccuracy.high,
-        distanceFilter: 10,
-      );
-    }
+    final entregadorName = prefs.getString('entregador'); 
+    if (entregadorName == null || entregadorName.isEmpty) return;
 
     isTracking = true;
-    debugPrint('🚀 GPS DE AÇO INICIADO PARA: $entregadorNome');
 
-    // 4. Começa a escutar as coordenadas e enviar pro Firestore em Tempo Real
-    _positionStream = Geolocator.getPositionStream(locationSettings: locationSettings)
-        .listen((Position position) {
+    // 1. O Ouvinte Silencioso: Atualiza APENAS a variável local (Custo zero de Firebase)
+    _positionStream = Geolocator.getPositionStream(
+      locationSettings: const LocationSettings(
+        accuracy: LocationAccuracy.high,
+        distanceFilter: 5, 
+      ),
+    ).listen((Position position) {
+      _lastPosition = position; 
+    });
+
+    // 2. O Relógio Suíço: Acorda EXATAMENTE a cada 10 segundos
+    _syncTimer = Timer.periodic(const Duration(seconds: 10), (timer) async {
+      // Se já recebemos alguma posição do satélite, disparamos pro banco
+      if (_lastPosition != null) {
+        try {
+          await FirebaseFirestore.instance.collection('entregadores_ativos').doc(entregadorName).set({
+            'lat': _lastPosition!.latitude,
+            'lng': _lastPosition!.longitude,
+            'heading': _lastPosition!.heading, 
+            'speed': _lastPosition!.speed,     
+            'timestamp': FieldValue.serverTimestamp(), 
+          }, SetOptions(merge: true));
           
-      debugPrint('📍 Nova coordenada: ${position.latitude}, ${position.longitude} (Heading: ${position.heading})');
-
-      // 🔥 Manda pro Firestore! O seu React na web vai ver isso instantaneamente.
-      FirebaseFirestore.instance.collection('entregadores_ativos').doc(entregadorNome).set({
-        'lat': position.latitude,
-        'lng': position.longitude,
-        'heading': position.heading, // Usado para girar o ícone da moto lá no mapa do cliente!
-        'speed': position.speed,
-        'timestamp': FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true)); // merge: true evita apagar outros dados que já estejam lá
-      
+          debugPrint('🚀 [TIMER 10s] Coordenada cravada no Firebase!');
+        } catch (e) {
+          debugPrint('Erro no timer de sync do Firebase: $e');
+        }
+      }
     });
   }
 
-  /// Para o rastreio (Ideal para quando ele termina o expediente)
-  static void stopTracking() {
-    if (_positionStream != null) {
-      _positionStream!.cancel();
-      _positionStream = null;
-    }
+  static void stopTracking() async {
     isTracking = false;
-    debugPrint('🛑 GPS DE AÇO DESLIGADO.');
+    
+    // Mata os dois processos!
+    _positionStream?.cancel();
+    _syncTimer?.cancel();
+    _lastPosition = null;
+
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final entregadorName = prefs.getString('entregador');
+      
+      if (entregadorName != null && entregadorName.isNotEmpty) {
+        await FirebaseFirestore.instance.collection('entregadores_ativos').doc(entregadorName).delete();
+        debugPrint('🛑 Rastreador e Timer Desligados. Limpo da base de dados.');
+      }
+    } catch (e) {
+      debugPrint('Erro ao sair do radar no Firebase: $e');
+    }
   }
 }
