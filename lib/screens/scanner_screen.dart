@@ -1,3 +1,5 @@
+// lib/screens/scanner_screen.dart
+
 import 'dart:async';
 import 'dart:io' show Platform;
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -136,8 +138,10 @@ class _ScannerScreenState extends State<ScannerScreen> with TickerProviderStateM
       // ATUALIZA NO FIRESTORE
       await docRef.update({
         'entregador': nomeEntregador,
-        'status': 'Saiu pra Entrega',
+        'status': 'Saiu pra Entrega', // Mantendo o padrão do seu app
         'data_saida': FieldValue.serverTimestamp(),
+        // 👉 A MÁGICA DO SLA ACONTECE AQUI:
+        'timestamp_atribuicao': FieldValue.serverTimestamp(), 
       });
 
       // 👉 A MÁGICA DA RECOMPENSA VISUAL

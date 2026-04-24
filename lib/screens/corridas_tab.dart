@@ -39,12 +39,61 @@ class _CorridasTabState extends State<CorridasTab> with SingleTickerProviderStat
     super.dispose();
   }
 
+  // 👉 O TRADUTOR DE DATAS FOI ADICIONADO AQUI PARA A IDE PARAR DE RECLAMAR
+  DateTime? _safeDate(dynamic value) {
+    if (value == null) return null;
+    
+    DateTime? dt;
+
+    if (value is Timestamp) {
+      dt = value.toDate();
+    } else if (value is String) {
+      dt = DateTime.tryParse(value);
+      if (dt == null && value.contains(' de ')) {
+        try {
+          final partes = value.split(' às ');
+          final pedacosData = partes[0].trim().split(' de ');
+          
+          if (pedacosData.length == 3) {
+            final dia = int.parse(pedacosData[0]);
+            final mesStr = pedacosData[1].toLowerCase().trim();
+            final ano = int.parse(pedacosData[2]);
+            const meses = {'janeiro': 1, 'fevereiro': 2, 'março': 3, 'abril': 4, 'maio': 5, 'junho': 6, 'julho': 7, 'agosto': 8, 'setembro': 9, 'outubro': 10, 'novembro': 11, 'dezembro': 12};
+            final mes = meses[mesStr] ?? 1;
+            
+            int hora = 0, minuto = 0, segundo = 0;
+            if (partes.length > 1) {
+              final pedacosHora = partes[1].trim().split(' ')[0].split(':');
+              if (pedacosHora.isNotEmpty) hora = int.parse(pedacosHora[0]);
+              if (pedacosHora.length > 1) minuto = int.parse(pedacosHora[1]);
+              if (pedacosHora.length > 2) segundo = int.parse(pedacosHora[2]);
+            }
+            dt = DateTime(ano, mes, dia, hora, minuto, segundo);
+          }
+        } catch (e) {
+          debugPrint('Falha ao traduzir: $value');
+        }
+      }
+    }
+
+    if (dt != null) {
+      if (dt.year == 2026 && dt.month == 1 && dt.day == 1) {
+        return null;
+      }
+      return dt;
+    }
+    return null;
+  }
+
+  // 👉 A FUNÇÃO DE FINALIZAR FOI ATUALIZADA PARA O "COMBO" DE DATAS
   Future<void> _finalizarEntrega(String pedidoId) async {
     HapticFeedback.heavyImpact();
     try {
       await FirebaseFirestore.instance.collection('pedidos').doc(pedidoId).update({
-        'status': 'Concluído',
+        'status': 'concluido', // Tudo minúsculo pro React entender
         'data_entrega': FieldValue.serverTimestamp(),
+        'data_conclusao': FieldValue.serverTimestamp(),
+        'timestamp': FieldValue.serverTimestamp(),
       });
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -283,19 +332,24 @@ class _CorridasTabState extends State<CorridasTab> with SingleTickerProviderStat
             bool isDone = status.contains('conclu') || status.contains('entregue');
             if (!isDone) return false;
 
+            // 👉 A MÁGICA ENTRA AQUI: Agendamento tem prioridade absoluta!
             DateTime? dataPedido;
-            if (data['data_entrega'] != null) {
-              dataPedido = data['data_entrega'] is Timestamp ? (data['data_entrega'] as Timestamp).toDate() : DateTime.tryParse(data['data_entrega'].toString());
-            } else if (data['timestamp'] != null) {
-              dataPedido = data['timestamp'] is Timestamp ? (data['timestamp'] as Timestamp).toDate() : DateTime.tryParse(data['timestamp'].toString());
+            
+            if (data['agendamento'] is Map && data['agendamento']['is_agendado'] == true) {
+              dataPedido = _safeDate(data['agendamento']['data']);
             }
+            
+            // Fallback para as datas da conclusão da central ou da entrega final
+            dataPedido ??= _safeDate(data['data_entrega']) ?? _safeDate(data['data_conclusao']) ?? _safeDate(data['timestamp']) ?? _safeDate(data['created_at']);
             
             if (dataPedido != null) {
                return dataPedido.isAfter(hoje.subtract(const Duration(seconds: 1)));
             }
             return false;
           } else {
-            return status.contains('saiu') || status.contains('andamento');
+ 
+            bool isDone = status.contains('conclu') || status.contains('entregue') || status.contains('cancel');
+            return !isDone; 
           }
         }).toList();
 

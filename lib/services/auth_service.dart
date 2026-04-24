@@ -9,7 +9,7 @@ class AuthService {
       // Como o seu PIN é o próprio ID do documento, fazemos a leitura direta!
       final docSnapshot = await FirebaseFirestore.instance
           .collection('entregadores')
-          .doc(pin) // Procura cirurgicamente o documento com o ID digitado (ex: '0001')
+          .doc(pin) // Procura cirurgicamente o documento com o ID digitado (ex: '5689')
           .get();
 
       if (docSnapshot.exists) {
@@ -20,7 +20,10 @@ class AuthService {
         
         // Salva a sessão localmente
         final prefs = await SharedPreferences.getInstance();
+        
+        // 🚀 O SEGREDO ESTÁ AQUI: Salvamos o NOME e o ID (PIN) separadamente!
         await prefs.setString('entregador', nomeEntregador);
+        await prefs.setString('entregador_id', docSnapshot.id); // Salva o ID oficial do Firebase
         
         // Bônus: Já que você tem a informação do CD na tabela, 
         // vamos salvar no cache também para usar futuramente!
@@ -40,6 +43,7 @@ class AuthService {
   static Future<void> logout() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove('entregador');
+    await prefs.remove('entregador_id'); // 🚀 Limpa a matrícula ao sair
     await prefs.remove('cd_entregador');
   }
 }

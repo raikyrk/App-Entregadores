@@ -1,5 +1,3 @@
-// lib/dashboard_screen.dart
-
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
@@ -9,14 +7,13 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:intl/intl.dart';
 import 'package:intl/date_symbol_data_local.dart';
-
 import 'login_screen.dart'; 
 import 'scanner_screen.dart';
 import 'profile_tab.dart';
 import 'corridas_tab.dart';
 import 'mapa_tab.dart';
 import '../widgets/ao_gosto_bottom_bar.dart'; 
-import '../services/location_service.dart'; 
+import '../services/location_service.dart';
 
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
@@ -34,9 +31,10 @@ class DashboardScreenState extends State<DashboardScreen> {
   bool _isTracking = false;
 
   double _saldoDoPeriodo = 0.0;
-  double _totalMaquininha = 0.0; // 👉 Auditor da Maquininha
+  double _totalMaquininha = 0.0;
   int _entregasPendentes = 0;
   int _entregasConcluidas = 0;
+  int _tempoMedioMinutos = 0;
   List<Map<String, dynamic>> _extratoDoPeriodo = [];
   bool _isLoadingDados = true;
 
@@ -71,8 +69,46 @@ class DashboardScreenState extends State<DashboardScreen> {
 
   DateTime? _safeDate(dynamic value) {
     if (value == null) return null;
-    if (value is Timestamp) return value.toDate();
-    if (value is String) return DateTime.tryParse(value);
+    
+    DateTime? dt;
+
+    if (value is Timestamp) {
+      dt = value.toDate();
+    } else if (value is String) {
+      dt = DateTime.tryParse(value);
+      if (dt == null && value.contains(' de ')) {
+        try {
+          final partes = value.split(' às ');
+          final pedacosData = partes[0].trim().split(' de ');
+          
+          if (pedacosData.length == 3) {
+            final dia = int.parse(pedacosData[0]);
+            final mesStr = pedacosData[1].toLowerCase().trim();
+            final ano = int.parse(pedacosData[2]);
+            const meses = {'janeiro': 1, 'fevereiro': 2, 'março': 3, 'abril': 4, 'maio': 5, 'junho': 6, 'julho': 7, 'agosto': 8, 'setembro': 9, 'outubro': 10, 'novembro': 11, 'dezembro': 12};
+            final mes = meses[mesStr] ?? 1;
+            
+            int hora = 0, minuto = 0, segundo = 0;
+            if (partes.length > 1) {
+              final pedacosHora = partes[1].trim().split(' ')[0].split(':');
+              if (pedacosHora.isNotEmpty) hora = int.parse(pedacosHora[0]);
+              if (pedacosHora.length > 1) minuto = int.parse(pedacosHora[1]);
+              if (pedacosHora.length > 2) segundo = int.parse(pedacosHora[2]);
+            }
+            dt = DateTime(ano, mes, dia, hora, minuto, segundo);
+          }
+        } catch (e) {
+          debugPrint('Falha ao traduzir: $value');
+        }
+      }
+    }
+
+    if (dt != null) {
+      if (dt.year == 2026 && dt.month == 1 && dt.day == 1) {
+        return null;
+      }
+      return dt;
+    }
     return null;
   }
 
@@ -83,9 +119,13 @@ class DashboardScreenState extends State<DashboardScreen> {
     try {
       double totalCorridas = 0.0;
       double totalExtras = 0.0;
-      double auditorMaquininha = 0.0; // Variável local para somar
+      double auditorMaquininha = 0.0; 
       int countPendentes = 0;
       int countConcluidas = 0;
+      
+      int somaMinutosSla = 0; 
+      int countSlaValidos = 0;
+
       List<Map<String, dynamic>> extrato = [];
 
       final pedidosQuery = await FirebaseFirestore.instance.collection('pedidos')
@@ -98,20 +138,36 @@ class DashboardScreenState extends State<DashboardScreen> {
           final status = data['status']?.toString().toLowerCase() ?? '';
 
           if (status.contains('conclu') || status.contains('entregue')) {
-            DateTime? dt = _safeDate(data['data_entrega']) ?? _safeDate(data['timestamp']) ?? _safeDate(data['created_at']);
+            
+            DateTime? dt;
+            if (data['agendamento'] is Map && data['agendamento']['is_agendado'] == true) {
+              dt = _safeDate(data['agendamento']['data']);
+            }
+            
+            dt ??= _safeDate(data['data_entrega']) ?? _safeDate(data['data_conclusao']) ?? _safeDate(data['timestamp']) ?? _safeDate(data['created_at']);
 
             if (dt != null) {
               if (dt.isAfter(_startDate.subtract(const Duration(seconds: 1))) &&
                   dt.isBefore(_endDate.add(const Duration(seconds: 1)))) {
+                
                 countConcluidas++;
                 
+                DateTime? dtEntrega = _safeDate(data['data_entrega']) ?? _safeDate(data['data_conclusao']);
+                DateTime? dtInicioRota = _safeDate(data['timestamp_atribuicao']) ?? _safeDate(data['timestamp']) ?? _safeDate(data['created_at']);
+                
+                if (dtEntrega != null && dtInicioRota != null && dtEntrega.isAfter(dtInicioRota)) {
+                    int diffMinutos = dtEntrega.difference(dtInicioRota).inMinutes;
+                    if (diffMinutos < (12 * 60)) { 
+                        somaMinutosSla += diffMinutos;
+                        countSlaValidos++;
+                    }
+                }
+
                 double taxa = 0.0;
                 if (data['pagamento'] is Map) {
                   taxa = _safeDouble(data['pagamento']['taxa_entrega']);
                   
-                  // 👉 NOVA LÓGICA DO AUDITOR DE MAQUININHA
                   String metodo = (data['pagamento']['metodo_principal'] ?? '').toString().toLowerCase();
-                  // Exclui os pagamentos online para auditar só o que ele passou na máquina
                   bool isOnline = metodo.contains('site') || metodo.contains('online') || metodo.contains('pix');
                   
                   if (!isOnline) {
@@ -172,9 +228,10 @@ class DashboardScreenState extends State<DashboardScreen> {
       if (mounted) {
         setState(() {
           _saldoDoPeriodo = totalCorridas + totalExtras;
-          _totalMaquininha = auditorMaquininha; // Grava o valor da maquininha no estado!
+          _totalMaquininha = auditorMaquininha; 
           _entregasPendentes = countPendentes;
           _entregasConcluidas = countConcluidas;
+          _tempoMedioMinutos = countSlaValidos > 0 ? (somaMinutosSla / countSlaValidos).round() : 0;
           _extratoDoPeriodo = extrato;
           _isLoadingDados = false;
         });
@@ -242,28 +299,30 @@ class DashboardScreenState extends State<DashboardScreen> {
                       confirmText: 'CONFIRMAR',
                       saveText: 'SALVAR',
                       builder: (context, child) {
+                        final brandOrange = const Color(0xFFF28C38);
                         return Theme(
-                          data: Theme.of(context).copyWith(
-                            appBarTheme: AppBarTheme(
-                              backgroundColor: isDark ? const Color(0xFF1A1D24) : const Color(0xFFF28C38),
-                              foregroundColor: Colors.white,
-                              iconTheme: const IconThemeData(color: Colors.white),
-                            ),
+                          data: ThemeData(
+                            useMaterial3: true,
                             colorScheme: isDark 
-                                ? const ColorScheme.dark(
-                                    primary: Color(0xFFF28C38), 
+                                ? ColorScheme.dark(
+                                    primary: brandOrange, 
                                     onPrimary: Colors.white, 
-                                    surface: Color(0xFF1A1D24), 
+                                    surface: const Color(0xFF1A1D24), 
                                     onSurface: Colors.white, 
+                                    onSurfaceVariant: Colors.grey.shade400,
                                   )
-                                : const ColorScheme.light(
-                                    primary: Color(0xFFF28C38), 
+                                : ColorScheme.light(
+                                    primary: brandOrange, 
                                     onPrimary: Colors.white,
                                     surface: Colors.white,
-                                    onSurface: Color(0xFF0F172A),
+                                    onSurface: const Color(0xFF0F172A),
+                                    onSurfaceVariant: const Color(0xFF64748B),
                                   ),
                             textButtonTheme: TextButtonThemeData(
-                              style: TextButton.styleFrom(foregroundColor: const Color(0xFFF28C38)),
+                              style: TextButton.styleFrom(
+                                foregroundColor: brandOrange,
+                                textStyle: const TextStyle(fontWeight: FontWeight.w800, letterSpacing: 0.5),
+                              ),
                             ),
                           ),
                           child: child!,
@@ -372,7 +431,7 @@ class DashboardScreenState extends State<DashboardScreen> {
     if (!_isTracking) {
       HapticFeedback.heavyImpact();
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: const Row(children: [Icon(Icons.info_outline_rounded, color: Colors.white), SizedBox(width: 8), Expanded(child: Text('Fique On-line para escanear pedidos!'))]), backgroundColor: Colors.amber.shade800, behavior: SnackBarBehavior.floating, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
+        SnackBar(content: const Row(children: [Icon(Icons.info_outline_rounded, color: Colors.white), SizedBox(width: 8), Expanded(child: Text('Fique On-line para escanear pedidos!', style: TextStyle(color: Colors.white)))]), backgroundColor: Colors.amber.shade800, behavior: SnackBarBehavior.floating, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
       );
       return;
     }
@@ -381,24 +440,56 @@ class DashboardScreenState extends State<DashboardScreen> {
     if (result == true && mounted) _onTabTapped(1);
   }
 
-  Future<void> _toggleTracking() async {
+ Future<void> _toggleTracking() async {
     HapticFeedback.mediumImpact();
     
     if (_isTracking) {
+      // Se já estiver rastreando, chama o modal de fim de expediente para desligar
       _showFechamentoModal();
     } else {
-      await LocationService.startTracking();
+      // 👉 AQUI ESTÁ A TRAVA DE SEGURANÇA!
+      bool sucesso = await LocationService.startTracking();
+      
+      if (!sucesso) {
+        // Se ele negou o GPS, o app barra ele na porta!
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: const Row(
+              children: [
+                Icon(Icons.warning_rounded, color: Colors.white), 
+                SizedBox(width: 8), 
+                Expanded(child: Text('Permissão de GPS obrigatória! Autorize nas configurações.', style: TextStyle(color: Colors.white)))
+              ]
+            ), 
+            backgroundColor: Colors.red.shade700, 
+            behavior: SnackBarBehavior.floating, 
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))
+          ),
+        );
+        return; // Interrompe a execução aqui! Não deixa ficar On-line.
+      }
+
       setState(() => _isTracking = LocationService.isTracking);
+      
       if (_isTracking) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: const Row(children: [Icon(Icons.battery_charging_full_rounded, color: Colors.white, size: 20), SizedBox(width: 8), Expanded(child: Text('Conectado! Modo econômico ativado 🔋'))]), backgroundColor: const Color(0xFF10B981), behavior: SnackBarBehavior.floating, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: const Row(
+              children: [
+                Icon(Icons.battery_charging_full_rounded, color: Colors.white, size: 20), 
+                SizedBox(width: 8), 
+                Expanded(child: Text('Conectado! Modo bateria economia 🔋', style: TextStyle(color: Colors.white)))
+              ]
+            ), 
+            backgroundColor: const Color(0xFF10B981), 
+            behavior: SnackBarBehavior.floating, 
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))
+          )
+        );
       }
     }
   }
 
-  // ===========================================================================
-  // 👉 MOTOR DE FECHAMENTO DE CAIXA (COMPROVANTE DA MAQUININHA)
-  // ===========================================================================
-  
   bool _isUploadingReceipt = false;
 
   void _showFechamentoModal() {
@@ -440,7 +531,6 @@ class DashboardScreenState extends State<DashboardScreen> {
                   const SizedBox(height: 8),
                   Text('Para ficar off-line, envie a foto dos comprovantes da maquininha com o resumo das vendas de hoje.', textAlign: TextAlign.center, style: TextStyle(fontSize: 15, color: Colors.grey.shade400)),
                   
-                  // 👉 O AVISO DE QUANTO TEM QUE TER NA MAQUININHA!
                   const SizedBox(height: 16),
                   Container(
                     padding: const EdgeInsets.all(16),
@@ -532,7 +622,6 @@ class DashboardScreenState extends State<DashboardScreen> {
       await ref.putFile(File(photo.path));
       final url = await ref.getDownloadURL();
 
-      // 👉 SALVA OS GANHOS DO MOTOBOY E O VALOR DA MAQUININHA SEPARADOS NO BANCO
       await FirebaseFirestore.instance.collection('fechamentos').add({
         'entregador': entregador,
         'data_fechamento': FieldValue.serverTimestamp(),
@@ -568,7 +657,7 @@ class DashboardScreenState extends State<DashboardScreen> {
     LocationService.stopTracking();
     setState(() => _isTracking = false);
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: const Text('Você está Off-line (Sem comprovante).'), backgroundColor: Colors.grey.shade800, behavior: SnackBarBehavior.floating, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
+      SnackBar(content: const Text('Você está Off-line (Sem comprovante).', style: TextStyle(color: Colors.white)), backgroundColor: Colors.grey.shade800, behavior: SnackBarBehavior.floating, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
     );
   }
 
@@ -580,24 +669,25 @@ class DashboardScreenState extends State<DashboardScreen> {
 
     return Scaffold(
       backgroundColor: bgColor,
-      body: SafeArea(bottom: false, child: _buildCurrentTab(isDark, textColor)),
+      body: SafeArea(
+        bottom: false, 
+        child: IndexedStack(
+          index: _currentTabIndex,
+          children: [
+            _buildHomeTab(isDark, textColor),
+            CorridasTab(entregadorName: _cachedEntregadorName ?? ''),
+            const MapaTab(),
+            ProfileTab(initialName: _cachedEntregadorName ?? 'Entregador', cdName: _cachedCD ?? 'Sem CD', isTracking: _isTracking),
+          ],
+        ),
+      ),
       extendBody: true, 
       bottomNavigationBar: AoGostoBottomBar(currentIndex: _currentTabIndex, onTap: _onTabTapped, onScanTap: _handleScanTap),
     );
   }
 
-  Widget _buildCurrentTab(bool isDark, Color textColor) {
-    switch (_currentTabIndex) {
-      case 0: return _buildHomeTab(isDark, textColor);
-      case 1: return CorridasTab(entregadorName: _cachedEntregadorName ?? '');
-      case 2: return const MapaTab();
-      case 3: return ProfileTab(initialName: _cachedEntregadorName ?? 'Entregador', cdName: _cachedCD ?? 'Sem CD', isTracking: _isTracking);
-      default: return _buildHomeTab(isDark, textColor);
-    }
-  }
-
   Widget _buildHomeTab(bool isDark, Color textColor) {
-    final mainText = _isTracking ? 'Buscando novas\ncorridas...' : 'Pronto para\ncomeçar?';
+    final mainText = _isTracking ? 'Buscando\ncorridas...' : 'Pronto para\ncomeçar?';
     final formatoMoeda = NumberFormat.currency(locale: 'pt_BR', symbol: 'R\$');
     
     final brandOrange = const Color(0xFFF28C38);
@@ -612,7 +702,7 @@ class DashboardScreenState extends State<DashboardScreen> {
     return Column(
       children: [
         Padding(
-          padding: const EdgeInsets.fromLTRB(24, 24, 24, 16), 
+          padding: const EdgeInsets.fromLTRB(24, 16, 24, 12), 
           child: Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             crossAxisAlignment: CrossAxisAlignment.center,
@@ -625,21 +715,21 @@ class DashboardScreenState extends State<DashboardScreen> {
                       saudacao['texto'], 
                       style: TextStyle(fontSize: 14, color: isDark ? Colors.grey[400] : const Color(0xFF64748B), fontWeight: FontWeight.w600, letterSpacing: 0.2)
                     ),
-                    const SizedBox(height: 6),
+                    const SizedBox(height: 4),
                     Row(
                       crossAxisAlignment: CrossAxisAlignment.center,
                       children: [
                         Image.asset(
                           'assets/logo.png',
-                          height: 30,
-                          width: 30,
+                          height: 28,
+                          width: 28,
                           fit: BoxFit.contain,
                         ),
                         const SizedBox(width: 8),
                         Expanded(
                           child: Text(
                             nomeFormatado, 
-                            style: TextStyle(fontSize: 26, color: textColor, fontWeight: FontWeight.w900, letterSpacing: -1.0, height: 1.0),
+                            style: TextStyle(fontSize: 24, color: textColor, fontWeight: FontWeight.w900, letterSpacing: -1.0, height: 1.0),
                             overflow: TextOverflow.ellipsis,
                           ),
                         ),
@@ -660,7 +750,7 @@ class DashboardScreenState extends State<DashboardScreen> {
             padding: const EdgeInsets.symmetric(horizontal: 24),
             child: Column(
               children: [
-                const SizedBox(height: 8),
+                const SizedBox(height: 4),
 
                 Container(
                   width: double.infinity,
@@ -683,23 +773,23 @@ class DashboardScreenState extends State<DashboardScreen> {
                         top: -10,
                         child: Image.asset(
                           'assets/go-laranja.png', 
-                          height: 130,
-                          width: 130,
+                          height: 120, 
+                          width: 120,
                           fit: BoxFit.contain,
                           opacity: const AlwaysStoppedAnimation(0.05),
                         ),
                       ),
                       
                       Padding(
-                        padding: const EdgeInsets.all(28), 
+                        padding: const EdgeInsets.all(20), 
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Text(
                               mainText, 
-                              style: TextStyle(fontSize: 30, fontWeight: FontWeight.w900, color: textColor, height: 1.1, letterSpacing: -1.0) 
+                              style: TextStyle(fontSize: 26, fontWeight: FontWeight.w900, color: textColor, height: 1.1, letterSpacing: -1.0) 
                             ),
-                            const SizedBox(height: 32), 
+                            const SizedBox(height: 20), 
                             
                             InkWell(
                               onTap: _toggleTracking,
@@ -707,7 +797,7 @@ class DashboardScreenState extends State<DashboardScreen> {
                               child: AnimatedContainer(
                                 duration: const Duration(milliseconds: 300),
                                 width: double.infinity, 
-                                padding: const EdgeInsets.symmetric(vertical: 18), 
+                                padding: const EdgeInsets.symmetric(vertical: 16), 
                                 decoration: BoxDecoration(
                                   gradient: _isTracking 
                                       ? null 
@@ -725,11 +815,11 @@ class DashboardScreenState extends State<DashboardScreen> {
                                 child: Row(
                                   mainAxisAlignment: MainAxisAlignment.center,
                                   children: [
-                                    Icon(_isTracking ? Icons.power_settings_new_rounded : Icons.power_settings_new_rounded, color: _isTracking ? Colors.red.shade600 : Colors.white, size: 22),
+                                    Icon(_isTracking ? Icons.power_settings_new_rounded : Icons.power_settings_new_rounded, color: _isTracking ? Colors.red.shade600 : Colors.white, size: 20),
                                     const SizedBox(width: 8),
                                     Text(
                                       _isTracking ? 'Ficar Off-line' : 'Iniciar Corridas', 
-                                      style: TextStyle(color: _isTracking ? Colors.red.shade600 : Colors.white, fontSize: 17, fontWeight: FontWeight.bold, letterSpacing: 0.5)
+                                      style: TextStyle(color: _isTracking ? Colors.red.shade600 : Colors.white, fontSize: 16, fontWeight: FontWeight.bold, letterSpacing: 0.5)
                                     ),
                                   ],
                                 ),
@@ -741,7 +831,7 @@ class DashboardScreenState extends State<DashboardScreen> {
                     ],
                   ),
                 ),
-                const SizedBox(height: 16),
+                const SizedBox(height: 12), 
 
                 GestureDetector(
                   onTap: () => _showExtratoModal(isDark),
@@ -770,7 +860,7 @@ class DashboardScreenState extends State<DashboardScreen> {
                             child: Text(
                               r'$', 
                               style: TextStyle(
-                                fontSize: 130, 
+                                fontSize: 120, 
                                 fontWeight: FontWeight.w900, 
                                 color: Colors.white.withOpacity(0.08), 
                                 height: 1.0,
@@ -778,9 +868,8 @@ class DashboardScreenState extends State<DashboardScreen> {
                             ),
                           ),
                         ),
-                        // CONTEÚDO DO CARD
                         Padding(
-                          padding: const EdgeInsets.all(22), 
+                          padding: const EdgeInsets.all(18), 
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
@@ -801,7 +890,7 @@ class DashboardScreenState extends State<DashboardScreen> {
                                     onTap: () => _showFilterModal(isDark),
                                     borderRadius: BorderRadius.circular(12),
                                     child: Container(
-                                      padding: const EdgeInsets.all(8),
+                                      padding: const EdgeInsets.all(6), 
                                       decoration: BoxDecoration(
                                         color: Colors.white.withOpacity(0.15), 
                                         borderRadius: BorderRadius.circular(12),
@@ -811,12 +900,12 @@ class DashboardScreenState extends State<DashboardScreen> {
                                   ),
                                 ],
                               ),
-                              const SizedBox(height: 10),
+                              const SizedBox(height: 8),
                               _isLoadingDados 
-                                  ? const SizedBox(height: 38, child: Align(alignment: Alignment.centerLeft, child: SizedBox(width: 24, height: 24, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 3)))) 
+                                  ? const SizedBox(height: 34, child: Align(alignment: Alignment.centerLeft, child: SizedBox(width: 24, height: 24, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 3)))) 
                                   : Text(
                                       formatoMoeda.format(_saldoDoPeriodo), 
-                                      style: const TextStyle(color: Colors.white, fontSize: 34, fontWeight: FontWeight.w900, letterSpacing: -1.2) 
+                                      style: const TextStyle(color: Colors.white, fontSize: 32, fontWeight: FontWeight.w900, letterSpacing: -1.2) 
                                     ),
                             ],
                           ),
@@ -825,7 +914,7 @@ class DashboardScreenState extends State<DashboardScreen> {
                     ),
                   ),
                 ),
-                const SizedBox(height: 16),
+                const SizedBox(height: 12),
 
                 Row(
                   children: [
@@ -839,7 +928,7 @@ class DashboardScreenState extends State<DashboardScreen> {
                         isLoading: _isLoadingDados
                       )
                     ),
-                    const SizedBox(width: 16),
+                    const SizedBox(width: 12),
                     Expanded(
                       child: _PremiumBentoCard(
                         title: _labelPeriodo == 'Hoje' ? 'Hoje' : 'Concluídas', 
@@ -852,12 +941,64 @@ class DashboardScreenState extends State<DashboardScreen> {
                     ),
                   ],
                 ),
+                
+                const SizedBox(height: 12),
+                _buildTempoMedioCard(isDark, brandOrange),
+
                 const SizedBox(height: 110), 
               ],
             ),
           ),
         ),
       ],
+    );
+  }
+
+  Widget _buildTempoMedioCard(bool isDark, Color brandOrange) {
+    String tempoText = _tempoMedioMinutos > 0 ? '${_tempoMedioMinutos}m' : '--';
+        
+    Color kpiColor = brandOrange; 
+    if (_tempoMedioMinutos > 0) {
+      if (_tempoMedioMinutos <= 45) {
+        kpiColor = const Color(0xFF10B981); 
+      } else if (_tempoMedioMinutos > 60) {
+        kpiColor = const Color(0xFFEF4444); 
+      }
+    }
+
+    return Container(
+      padding: const EdgeInsets.all(16), 
+      decoration: BoxDecoration(
+        color: isDark ? const Color(0xFF1A1D24) : Colors.white, 
+        borderRadius: BorderRadius.circular(28), 
+        boxShadow: [BoxShadow(color: const Color(0xFF0F172A).withOpacity(0.04), blurRadius: 20, offset: const Offset(0, 10))]
+      ),
+      child: Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: kpiColor.withOpacity(0.12),
+              borderRadius: BorderRadius.circular(16)
+            ),
+            child: Icon(Icons.speed_rounded, color: kpiColor, size: 24),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('Tempo Médio', style: TextStyle(fontSize: 15, color: isDark ? Colors.white : const Color(0xFF0F172A), fontWeight: FontWeight.w800, letterSpacing: -0.5)),
+                const SizedBox(height: 2),
+                Text('Das entregas de $_labelPeriodo', style: TextStyle(fontSize: 13, color: isDark ? Colors.grey[500] : const Color(0xFF64748B), fontWeight: FontWeight.w500)),
+              ],
+            ),
+          ),
+          _isLoadingDados 
+            ? const SizedBox(height: 24, width: 24, child: CircularProgressIndicator(strokeWidth: 3))
+            : Text(tempoText, style: TextStyle(fontSize: 26, color: kpiColor, fontWeight: FontWeight.w900, letterSpacing: -1.0)),
+        ],
+      ),
     );
   }
 
@@ -969,25 +1110,25 @@ class _PremiumBentoCard extends StatelessWidget {
         borderRadius: BorderRadius.circular(28), 
         boxShadow: [BoxShadow(color: const Color(0xFF0F172A).withOpacity(0.04), blurRadius: 20, offset: const Offset(0, 10))]
       ),
-      padding: const EdgeInsets.all(24), 
+      padding: const EdgeInsets.all(16), 
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min, 
         children: [
           Container(
-            padding: const EdgeInsets.all(12),
+            padding: const EdgeInsets.all(10), 
             decoration: BoxDecoration(
               color: iconColor.withOpacity(0.1),
-              borderRadius: BorderRadius.circular(16)
+              borderRadius: BorderRadius.circular(14)
             ),
-            child: Icon(icon, color: iconColor, size: 24),
+            child: Icon(icon, color: iconColor, size: 22),
           ),
-          const SizedBox(height: 24), 
+          const SizedBox(height: 12), 
           isLoading 
-            ? SizedBox(height: 38, child: Align(alignment: Alignment.centerLeft, child: SizedBox(width: 24, height: 24, child: CircularProgressIndicator(color: iconColor, strokeWidth: 3)))) 
-            : Text(value, style: TextStyle(fontSize: 36, color: isDark ? Colors.white : const Color(0xFF0F172A), fontWeight: FontWeight.w900, letterSpacing: -1.0, height: 1.0)),
-          const SizedBox(height: 6),
-          Text(title, style: TextStyle(fontSize: 14, color: isDark ? Colors.grey[400] : const Color(0xFF64748B), fontWeight: FontWeight.w600)),
+            ? SizedBox(height: 32, child: Align(alignment: Alignment.centerLeft, child: SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: iconColor, strokeWidth: 3)))) 
+            : Text(value, style: TextStyle(fontSize: 32, color: isDark ? Colors.white : const Color(0xFF0F172A), fontWeight: FontWeight.w900, letterSpacing: -1.0, height: 1.0)), 
+          const SizedBox(height: 4),
+          Text(title, style: TextStyle(fontSize: 13, color: isDark ? Colors.grey[400] : const Color(0xFF64748B), fontWeight: FontWeight.w600)),
         ],
       ),
     );

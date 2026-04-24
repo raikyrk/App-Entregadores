@@ -1,4 +1,7 @@
+// lib/services/location_service.dart
+
 import 'dart:async';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -7,75 +10,154 @@ import 'package:shared_preferences/shared_preferences.dart';
 class LocationService {
   static bool isTracking = false;
   
-  // 👉 AS TRÊS PEÇAS DA NOVA ARQUITETURA
   static StreamSubscription<Position>? _positionStream;
-  static Timer? _syncTimer; // O Maestro Inquebrável
-  static Position? _lastPosition; // A Memória Cache
+  static Timer? _syncTimer; 
+  static Position? _lastPosition; 
+  static Position? _lastSavedPosition; // 👉 NOVA VARIÁVEL DE CONTROLE
 
-  static Future<void> startTracking() async {
-    if (isTracking) return;
+  static Future<bool> startTracking() async {
+    if (isTracking) return true;
 
+    // 1. O GPS físico do celular está ligado?
     bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
-    if (!serviceEnabled) return;
+    if (!serviceEnabled) {
+      await Geolocator.openLocationSettings();
+      return false; 
+    }
 
+    // 2. O App tem permissão de localização?
     LocationPermission permission = await Geolocator.checkPermission();
     if (permission == LocationPermission.denied) {
       permission = await Geolocator.requestPermission();
-      if (permission == LocationPermission.denied) return;
     }
 
+    if (permission == LocationPermission.denied || permission == LocationPermission.deniedForever) {
+      await Geolocator.openAppSettings();
+      return false; 
+    }
+
+    // 👉 A CORREÇÃO: Usamos o nome salvo no login, pois não temos 'entregador_id' local.
     final prefs = await SharedPreferences.getInstance();
-    final entregadorName = prefs.getString('entregador'); 
-    if (entregadorName == null || entregadorName.isEmpty) return;
+    final entregadorNome = prefs.getString('entregador'); 
+    
+    if (entregadorNome == null || entregadorNome.isEmpty) {
+      debugPrint('⚠️ Erro: Nome do entregador não encontrado na memória local!');
+      return false;
+    }
 
     isTracking = true;
 
-    // 1. O Ouvinte Silencioso: Atualiza APENAS a variável local (Custo zero de Firebase)
-    _positionStream = Geolocator.getPositionStream(
-      locationSettings: const LocationSettings(
+    // 👉 BUSCA INTELIGENTE: Pega o ID real do documento dele no Firestore antes de iniciar o timer
+    String docId = entregadorNome; // Fallback
+    try {
+      final query = await FirebaseFirestore.instance
+          .collection('entregadores')
+          .where('nome', isEqualTo: entregadorNome)
+          .limit(1)
+          .get();
+      if (query.docs.isNotEmpty) {
+        docId = query.docs.first.id;
+      }
+    } catch(e) {
+      debugPrint('Erro ao buscar ID do documento do entregador: $e');
+    }
+
+    try {
+      _lastPosition = await Geolocator.getCurrentPosition(desiredAccuracy: LocationAccuracy.high);
+    } catch (e) {
+      debugPrint('Aviso: GPS não respondeu de imediato.');
+    }
+
+    // 3. Configuração do Foreground Service (Para não morrer no bolso)
+    late LocationSettings locationSettings;
+    if (defaultTargetPlatform == TargetPlatform.android) {
+      locationSettings = AndroidSettings(
         accuracy: LocationAccuracy.high,
-        distanceFilter: 5, 
-      ),
-    ).listen((Position position) {
+        distanceFilter: 10,
+        forceLocationManager: true,
+        intervalDuration: const Duration(seconds: 10),
+        foregroundNotificationConfig: const ForegroundNotificationConfig(
+          notificationText: "Buscando rotas e enviando localização para a central...",
+          notificationTitle: "Ao Gosto: Você está On-line",
+          enableWakeLock: true,
+        ),
+      );
+    } else if (defaultTargetPlatform == TargetPlatform.iOS || defaultTargetPlatform == TargetPlatform.macOS) {
+      locationSettings = AppleSettings(
+        accuracy: LocationAccuracy.high,
+        activityType: ActivityType.automotiveNavigation,
+        distanceFilter: 10,
+        pauseLocationUpdatesAutomatically: false,
+        showBackgroundLocationIndicator: true, 
+      );
+    } else {
+      locationSettings = const LocationSettings(accuracy: LocationAccuracy.high, distanceFilter: 10);
+    }
+
+    _positionStream = Geolocator.getPositionStream(locationSettings: locationSettings).listen((Position position) {
       _lastPosition = position; 
     });
 
-    // 2. O Relógio Suíço: Acorda EXATAMENTE a cada 10 segundos
+    // 4. O Timer que salva as coordenadas no Firestore do Marcelão
     _syncTimer = Timer.periodic(const Duration(seconds: 10), (timer) async {
-      // Se já recebemos alguma posição do satélite, disparamos pro banco
       if (_lastPosition != null) {
-        try {
-          await FirebaseFirestore.instance.collection('entregadores_ativos').doc(entregadorName).set({
-            'lat': _lastPosition!.latitude,
-            'lng': _lastPosition!.longitude,
-            'heading': _lastPosition!.heading, 
-            'speed': _lastPosition!.speed,     
-            'timestamp': FieldValue.serverTimestamp(), 
-          }, SetOptions(merge: true));
+        
+        // 👉 O FILTRO SALVADOR DE DINHEIRO
+        // Se ele mal andou (menos de 5 metros), não gasta dinheiro salvando no banco!
+        if (_lastSavedPosition != null) {
+          double distance = Geolocator.distanceBetween(
+              _lastSavedPosition!.latitude, _lastSavedPosition!.longitude,
+              _lastPosition!.latitude, _lastPosition!.longitude);
           
-          debugPrint('🚀 [TIMER 10s] Coordenada cravada no Firebase!');
+          if (distance < 5.0) return; // Sai fora e economiza o Write!
+        }
+
+        try {
+          await FirebaseFirestore.instance.collection('entregadores').doc(docId).set({
+            'nome': entregadorNome, 
+            'is_online': true,
+            'localizacao_atual': {
+              'latitude': _lastPosition!.latitude,
+              'longitude': _lastPosition!.longitude,
+              'heading': _lastPosition!.heading, 
+              'velocidade': _lastPosition!.speed * 3.6,     
+              'last_update': FieldValue.serverTimestamp(), 
+            }
+          }, SetOptions(merge: true));
+
+          _lastSavedPosition = _lastPosition; // 👉 Atualiza a última posição salva com sucesso
+
         } catch (e) {
           debugPrint('Erro no timer de sync do Firebase: $e');
         }
       }
     });
+
+    return true; 
   }
 
   static void stopTracking() async {
     isTracking = false;
-    
-    // Mata os dois processos!
     _positionStream?.cancel();
     _syncTimer?.cancel();
     _lastPosition = null;
+    _lastSavedPosition = null; // 👉 Limpa a memória de posição ao deslogar
 
     try {
       final prefs = await SharedPreferences.getInstance();
-      final entregadorName = prefs.getString('entregador');
+      final entregadorNome = prefs.getString('entregador');
       
-      if (entregadorName != null && entregadorName.isNotEmpty) {
-        await FirebaseFirestore.instance.collection('entregadores_ativos').doc(entregadorName).delete();
-        debugPrint('🛑 Rastreador e Timer Desligados. Limpo da base de dados.');
+      if (entregadorNome != null && entregadorNome.isNotEmpty) {
+        // Encontra o documento dele para setar offline
+        final query = await FirebaseFirestore.instance
+            .collection('entregadores')
+            .where('nome', isEqualTo: entregadorNome)
+            .limit(1)
+            .get();
+            
+        if (query.docs.isNotEmpty) {
+          await query.docs.first.reference.set({'is_online': false}, SetOptions(merge: true));
+        }
       }
     } catch (e) {
       debugPrint('Erro ao sair do radar no Firebase: $e');
