@@ -40,7 +40,7 @@ class _ProfileTabState extends State<ProfileTab> with WidgetsBindingObserver {
   
   // 🚀 A MÁGICA DO SHOREBIRD AQUI:
   // Quando você fizer um hotfix, mude para "2", rode `shorebird patch` e todos os apps atualizam na rua!
-  final String _otaPatchVersion = "4"; 
+  final String _otaPatchVersion = "4.1"; 
   
   bool _isUploadingPhoto = false; 
 
@@ -119,6 +119,7 @@ class _ProfileTabState extends State<ProfileTab> with WidgetsBindingObserver {
     HapticFeedback.heavyImpact();
     await Geolocator.openAppSettings();
   }
+  
 
   // ===========================================================================
   // 👉 CARREGAMENTO DE DADOS (MANTIDO INTACTO)
