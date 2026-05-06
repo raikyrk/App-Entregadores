@@ -11,9 +11,9 @@ class LocationService {
   static bool isTracking = false;
   
   static StreamSubscription<Position>? _positionStream;
-  static Timer? _syncTimer; 
+  // 👉 Timer removido daqui! O disparo agora é nativo.
   static Position? _lastPosition; 
-  static Position? _lastSavedPosition; // 👉 NOVA VARIÁVEL DE CONTROLE
+  static Position? _lastSavedPosition; // 👉 VARIÁVEL DE CONTROLE MANTIDA
 
   static Future<bool> startTracking() async {
     if (isTracking) return true;
@@ -36,7 +36,7 @@ class LocationService {
       return false; 
     }
 
-    // 👉 A CORREÇÃO: Usamos o nome salvo no login, pois não temos 'entregador_id' local.
+    // Pega o nome salvo no login
     final prefs = await SharedPreferences.getInstance();
     final entregadorNome = prefs.getString('entregador'); 
     
@@ -47,7 +47,7 @@ class LocationService {
 
     isTracking = true;
 
-    // 👉 BUSCA INTELIGENTE: Pega o ID real do documento dele no Firestore antes de iniciar o timer
+    // 👉 BUSCA INTELIGENTE: Pega o ID real do documento dele no Firestore antes de iniciar
     String docId = entregadorNome; // Fallback
     try {
       final query = await FirebaseFirestore.instance
@@ -73,7 +73,7 @@ class LocationService {
     if (defaultTargetPlatform == TargetPlatform.android) {
       locationSettings = AndroidSettings(
         accuracy: LocationAccuracy.high,
-        distanceFilter: 10,
+        distanceFilter: 10, // 👉 TRAVA 1: O Android só acorda a Stream a cada 10 metros!
         forceLocationManager: true,
         intervalDuration: const Duration(seconds: 10),
         foregroundNotificationConfig: const ForegroundNotificationConfig(
@@ -86,7 +86,7 @@ class LocationService {
       locationSettings = AppleSettings(
         accuracy: LocationAccuracy.high,
         activityType: ActivityType.automotiveNavigation,
-        distanceFilter: 10,
+        distanceFilter: 10, // 👉 TRAVA 1: O iOS só acorda a Stream a cada 10 metros!
         pauseLocationUpdatesAutomatically: false,
         showBackgroundLocationIndicator: true, 
       );
@@ -94,42 +94,37 @@ class LocationService {
       locationSettings = const LocationSettings(accuracy: LocationAccuracy.high, distanceFilter: 10);
     }
 
-    _positionStream = Geolocator.getPositionStream(locationSettings: locationSettings).listen((Position position) {
+    // 4. 👉 A GRANDE MUDANÇA: O Listener que salva as coordenadas no Firestore do Marcelão (Sem Timer)
+    _positionStream = Geolocator.getPositionStream(locationSettings: locationSettings).listen((Position position) async {
       _lastPosition = position; 
-    });
 
-    // 4. O Timer que salva as coordenadas no Firestore do Marcelão
-    _syncTimer = Timer.periodic(const Duration(seconds: 10), (timer) async {
-      if (_lastPosition != null) {
+      // 👉 TRAVA 2 (O FILTRO SALVADOR DE DINHEIRO)
+      // Protege contra pulos falsos do GPS (drift). Se for < 5 metros, aborta.
+      if (_lastSavedPosition != null) {
+        double distance = Geolocator.distanceBetween(
+            _lastSavedPosition!.latitude, _lastSavedPosition!.longitude,
+            position.latitude, position.longitude);
         
-        // 👉 O FILTRO SALVADOR DE DINHEIRO
-        // Se ele mal andou (menos de 5 metros), não gasta dinheiro salvando no banco!
-        if (_lastSavedPosition != null) {
-          double distance = Geolocator.distanceBetween(
-              _lastSavedPosition!.latitude, _lastSavedPosition!.longitude,
-              _lastPosition!.latitude, _lastPosition!.longitude);
-          
-          if (distance < 5.0) return; // Sai fora e economiza o Write!
-        }
+        if (distance < 5.0) return; // Sai fora e economiza o Write!
+      }
 
-        try {
-          await FirebaseFirestore.instance.collection('entregadores').doc(docId).set({
-            'nome': entregadorNome, 
-            'is_online': true,
-            'localizacao_atual': {
-              'latitude': _lastPosition!.latitude,
-              'longitude': _lastPosition!.longitude,
-              'heading': _lastPosition!.heading, 
-              'velocidade': _lastPosition!.speed * 3.6,     
-              'last_update': FieldValue.serverTimestamp(), 
-            }
-          }, SetOptions(merge: true));
+      try {
+        await FirebaseFirestore.instance.collection('entregadores').doc(docId).set({
+          'nome': entregadorNome, 
+          'is_online': true,
+          'localizacao_atual': {
+            'latitude': position.latitude,
+            'longitude': position.longitude,
+            'heading': position.heading, 
+            'velocidade': position.speed * 3.6,     
+            'last_update': FieldValue.serverTimestamp(), 
+          }
+        }, SetOptions(merge: true));
 
-          _lastSavedPosition = _lastPosition; // 👉 Atualiza a última posição salva com sucesso
+        _lastSavedPosition = position; // 👉 Atualiza a última posição salva com sucesso
 
-        } catch (e) {
-          debugPrint('Erro no timer de sync do Firebase: $e');
-        }
+      } catch (e) {
+        debugPrint('Erro no sync do Firebase via Stream: $e');
       }
     });
 
@@ -139,9 +134,9 @@ class LocationService {
   static void stopTracking() async {
     isTracking = false;
     _positionStream?.cancel();
-    _syncTimer?.cancel();
+    // 👉 Chamada do Timer removida daqui
     _lastPosition = null;
-    _lastSavedPosition = null; // 👉 Limpa a memória de posição ao deslogar
+    _lastSavedPosition = null; // Limpa a memória de posição ao deslogar
 
     try {
       final prefs = await SharedPreferences.getInstance();
