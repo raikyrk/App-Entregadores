@@ -1,9 +1,7 @@
-import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:intl/intl.dart';
 import 'package:intl/date_symbol_data_local.dart';
 
 import 'scanner_screen.dart';
@@ -285,7 +283,11 @@ class DashboardScreenState extends State<DashboardScreen> {
         onSkip: _desligarRadarSemComprovante,
       );
     } else {
-      bool sucesso = await LocationService.startTracking();
+      // 👉 Correção 1: Passando o context para a função
+      bool sucesso = await LocationService.startTracking(context);
+      
+      // 👉 Correção 2: Trava de segurança para evitar crash se o usuário fechar a tela enquanto carregava
+      if (!mounted) return;
       
       if (!sucesso) {
         ScaffoldMessenger.of(context).showSnackBar(

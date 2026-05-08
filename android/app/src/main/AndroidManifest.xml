@@ -2,13 +2,23 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
+    <!-- 1. Permissões Básicas -->
     <uses-permission android:name="android.permission.INTERNET"/>
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
+    
+    <!-- 2. Permissão para o GPS funcionar com a tela apagada -->
     <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION"/>
 
+    <!-- 3. Permissões para manter o app vivo em segundo plano (Foreground Service) -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION"/> 
+
+    <!-- 👉 4. A SALVAÇÃO: Permissão para a notificação do Android 13+ não quebrar o serviço -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+
+    <!-- 👉 5. A SALVAÇÃO: Permissão para pedir a liberação da bateria -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"/>
 
     <application
         android:label="Go! Entregas"
@@ -34,11 +44,12 @@
             </intent-filter>
         </activity>
 
-        <service
-            android:name="com.pravera.flutter_background_service.BackgroundService"
+        <!-- Serviço oficial do Geolocator -->
+        <service 
+            android:name="com.baseflow.geolocator.GeolocatorLocationService"
             android:enabled="true"
             android:exported="false"
-            android:foregroundServiceType="location"/>
+            android:foregroundServiceType="location" />
 
         <meta-data
             android:name="flutterEmbedding"

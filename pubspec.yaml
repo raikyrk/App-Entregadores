@@ -1,6 +1,6 @@
 name: aogosto_entregador
 description: Aplicativo oficial de logística, roteirização inteligente e painel financeiro para os entregadores parceiros da Ao Gosto.
-version: 2.0.0+3
+version: 2.0.1+6
 
 environment:
   sdk: ">=3.0.0 <4.0.0"

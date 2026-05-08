@@ -40,7 +40,7 @@ class _ProfileTabState extends State<ProfileTab> with WidgetsBindingObserver {
   
   // 🚀 A MÁGICA DO SHOREBIRD AQUI:
   // Quando você fizer um hotfix, mude para "2", rode `shorebird patch` e todos os apps atualizam na rua!
-  final String _otaPatchVersion = "4.1"; 
+  final String _otaPatchVersion = "4.3"; 
   
   bool _isUploadingPhoto = false; 
 
@@ -54,7 +54,7 @@ class _ProfileTabState extends State<ProfileTab> with WidgetsBindingObserver {
 
   // 👉 FocusNodes para a edição inline inteligente!
   final FocusNode _focusApelido = FocusNode();
-  final FocusNode _focusTelefone = FocusNode();
+  final FocusNode _focusTelefone = FocusNode(); 
   final FocusNode _focusPlaca = FocusNode();
   final FocusNode _focusCor = FocusNode();
 
@@ -115,14 +115,43 @@ class _ProfileTabState extends State<ProfileTab> with WidgetsBindingObserver {
     }
   }
 
-  void _openSettings() async {
+  // 👉 A NOVA MÁGICA DE UX: Motor Inteligente de Permissões
+  Future<void> _fixPermission(String type) async {
     HapticFeedback.heavyImpact();
-    await Geolocator.openAppSettings();
+    
+    if (type == 'gps') {
+      // 1. Pede a permissão básica (Durante o uso)
+      LocationPermission perm = await Geolocator.requestPermission();
+      
+      // 2. O COMBO: Se ele aceitou o básico, já emenda a tela do 2º Plano (O tempo todo)
+      if (perm == LocationPermission.whileInUse) {
+        await Future.delayed(const Duration(milliseconds: 300)); // Um micro-respiro pro Android não bugar
+        await Permission.locationAlways.request();
+      } else if (perm == LocationPermission.deniedForever) {
+        // Se ele negou pra sempre, a única saída é mandar pras configurações do celular
+        await Geolocator.openAppSettings();
+      }
+    } 
+    else if (type == 'bg_gps') {
+      // Se ele clicou direto no X do 2º plano
+      var status = await Permission.locationAlways.request();
+      if (!status.isGranted) {
+        await Geolocator.openAppSettings();
+      }
+    } 
+    else if (type == 'notif') {
+      var status = await Permission.notification.request();
+      if (status.isPermanentlyDenied) {
+        await openAppSettings();
+      }
+    }
+    
+    // Atualiza os ícones verdes/vermelhos na tela
+    _checkDiagnostics();
   }
-  
 
   // ===========================================================================
-  // 👉 CARREGAMENTO DE DADOS (MANTIDO INTACTO)
+  // 👉 CARREGAMENTO DE DADOS
   // ===========================================================================
   Future<void> _loadAppVersion() async {
     try {
@@ -241,7 +270,7 @@ class _ProfileTabState extends State<ProfileTab> with WidgetsBindingObserver {
   }
 
   // ===========================================================================
-  // 👉 MODAL DE EDIÇÃO REVISADO (ANTI-PUXADINHO)
+  // 👉 MODAL DE EDIÇÃO REVISADO
   // ===========================================================================
   void _showEditModal({FocusNode? targetFocus}) {
     HapticFeedback.lightImpact();
@@ -250,7 +279,6 @@ class _ProfileTabState extends State<ProfileTab> with WidgetsBindingObserver {
     final cPlaca = TextEditingController(text: _placa);
     final cCor = TextEditingController(text: _corMoto);
 
-    // Abre o teclado no campo certo após o modal abrir
     Future.delayed(const Duration(milliseconds: 300), () {
       if (targetFocus != null && targetFocus.canRequestFocus) {
         targetFocus.requestFocus();
@@ -345,7 +373,7 @@ class _ProfileTabState extends State<ProfileTab> with WidgetsBindingObserver {
   }
 
   // ===========================================================================
-  // 👉 CONSTRUÇÃO DA TELA INCRÍVEL (A NOVA ERA)
+  // 👉 CONSTRUÇÃO DA TELA INCRÍVEL
   // ===========================================================================
   @override
   Widget build(BuildContext context) {
@@ -373,7 +401,7 @@ class _ProfileTabState extends State<ProfileTab> with WidgetsBindingObserver {
           children: [
             const SizedBox(height: 24),
             
-            // 👉 CABEÇALHO INTEGRADO (AVATAR + NOME + CD) - EXPERT DESIGN
+            // 👉 CABEÇALHO INTEGRADO (AVATAR + NOME + CD)
             Container(
               padding: const EdgeInsets.all(24),
               width: double.infinity,
@@ -381,9 +409,8 @@ class _ProfileTabState extends State<ProfileTab> with WidgetsBindingObserver {
               child: Stack(
                 clipBehavior: Clip.none,
                 children: [
-                  // 👉 BOTÃO SAIR (ELEGANCE NO TOPO) - UX #1
-                 Positioned(
-                    top: -8, left: -8, // Ajustei levemente para o ícone novo encaixar melhor
+                  Positioned(
+                    top: -8, left: -8,
                     child: Material(
                       color: Colors.transparent,
                       child: InkWell(
@@ -391,7 +418,6 @@ class _ProfileTabState extends State<ProfileTab> with WidgetsBindingObserver {
                         borderRadius: BorderRadius.circular(12),
                         child: Container(
                           padding: const EdgeInsets.all(12), 
-                          // 👉 Trocamos o bolt_rounded pelo logout_rounded
                           child: Icon(Icons.logout_rounded, color: const Color(0xFFEF4444).withOpacity(0.8), size: 22)
                         ),
                       ),
@@ -429,7 +455,7 @@ class _ProfileTabState extends State<ProfileTab> with WidgetsBindingObserver {
             
             const SizedBox(height: 32),
 
-            // 👉 1. BENTO BOX: SAÚDE DO APP (MANTIDO E INTEGRADO)
+            // 👉 1. BENTO BOX: SAÚDE DO APP (VINCULADO AO NOVO MOTOR INTELIGENTE)
             Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [Text('Saúde do App', style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800, color: isDark ? Colors.grey[500] : const Color(0xFF64748B), letterSpacing: 0.2))]),
             const SizedBox(height: 12),
             Container(
@@ -439,21 +465,20 @@ class _ProfileTabState extends State<ProfileTab> with WidgetsBindingObserver {
                 ? const Padding(padding: EdgeInsets.all(32), child: Center(child: CircularProgressIndicator(color: Color(0xFFF28C38))))
                 : Column(
                     children: [
-                      _buildDiagnosticRow('Localização (GPS)', _hasGps, Icons.location_on_rounded, isDark),
-                      _buildDiagnosticRow('GPS em 2º Plano', _hasBgGps, Icons.radar_rounded, isDark),
-                      _buildDiagnosticRow('Notificações de Pedido', _hasNotifications, Icons.notifications_active_rounded, isDark, isLast: true),
+                      _buildDiagnosticRow('Localização (GPS)', _hasGps, Icons.location_on_rounded, isDark, onFix: () => _fixPermission('gps')),
+                      _buildDiagnosticRow('GPS em 2º Plano', _hasBgGps, Icons.radar_rounded, isDark, onFix: () => _fixPermission('bg_gps')),
+                      _buildDiagnosticRow('Notificações de Pedido', _hasNotifications, Icons.notifications_active_rounded, isDark, isLast: true, onFix: () => _fixPermission('notif')),
                     ],
                   ),
             ),
 
             const SizedBox(height: 32),
 
-            // 👉 2. BENTO BOX: CONTA (COM EDIÇÃO INLINE INTELIGENTE) - UX #2 & #3
+            // 👉 2. BENTO BOX: CONTA 
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween, 
               children: [
                 Text('Detalhes da Conta', style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800, color: isDark ? Colors.grey[500] : const Color(0xFF64748B), letterSpacing: 0.2)),
-                // 👉 Lápis de edição geral aqui no cabeçalho
                 InkWell(onTap: () => _showEditModal(), borderRadius: BorderRadius.circular(8), child: Padding(padding: const EdgeInsets.all(8), child: Icon(Icons.edit_rounded, color: isDark ? Colors.grey[600] : Colors.grey[400], size: 20))),
               ]
             ),
@@ -472,7 +497,7 @@ class _ProfileTabState extends State<ProfileTab> with WidgetsBindingObserver {
             
             const SizedBox(height: 64),
 
-            // 👉 FOOTER SHOREBIRD: VERSÃO + PATCH OTA (PREMIUM DESIGN) - DNA #4
+            // 👉 FOOTER SHOREBIRD
             Row(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
@@ -499,12 +524,13 @@ class _ProfileTabState extends State<ProfileTab> with WidgetsBindingObserver {
     );
   }
 
-  Widget _buildDiagnosticRow(String title, bool isOk, IconData icon, bool isDark, {bool isLast = false}) {
+  // 👉 NOVO PARÂMETRO 'onFix' PARA RECEBER A FUNÇÃO CERTA DE PERMISSÃO
+  Widget _buildDiagnosticRow(String title, bool isOk, IconData icon, bool isDark, {bool isLast = false, VoidCallback? onFix}) {
     final statusColor = isOk ? const Color(0xFF10B981) : const Color(0xFFEF4444);
     final statusIcon = isOk ? Icons.check_circle_rounded : Icons.error_rounded;
     final statusText = isOk ? 'Tudo certo' : 'Requer Atenção';
     return InkWell(
-      onTap: isOk ? null : _openSettings, 
+      onTap: isOk ? null : onFix, // Chama o motor inteligente no lugar do _openSettings genérico
       borderRadius: BorderRadius.circular(24),
       child: Container(
         margin: EdgeInsets.only(bottom: isLast ? 0 : 8),
@@ -528,7 +554,6 @@ class _ProfileTabState extends State<ProfileTab> with WidgetsBindingObserver {
     final valueTextColor = isEmpty ? (isDark ? Colors.grey[600] : Colors.grey[400]) : (isDark ? Colors.white : const Color(0xFF0F172A));
     
     return InkWell(
-      // 👉 MÁGICA #3: Clicou na linha, abre o modal focado naquele campo!
       onTap: () => _showEditModal(targetFocus: fNode),
       borderRadius: BorderRadius.circular(24),
       child: Container(
@@ -549,7 +574,6 @@ class _ProfileTabState extends State<ProfileTab> with WidgetsBindingObserver {
                 ],
               ),
             ),
-            // Ícone de seta sutil pra indicar que é clicável
             Icon(Icons.arrow_forward_ios_rounded, color: isDark ? Colors.grey[800] : Colors.grey[300], size: 12),
           ],
         ),
@@ -576,7 +600,6 @@ class _ProfileTabState extends State<ProfileTab> with WidgetsBindingObserver {
   }
 }
 
-// FORMATADORES MANTIDOS
 class _PhoneInputFormatter extends TextInputFormatter {
   @override
   TextEditingValue formatEditUpdate(TextEditingValue oldValue, TextEditingValue newValue) {

@@ -39,7 +39,7 @@ class _CorridasTabState extends State<CorridasTab> with SingleTickerProviderStat
     super.dispose();
   }
 
-  // 👉 O TRADUTOR DE DATAS FOI ADICIONADO AQUI PARA A IDE PARAR DE RECLAMAR
+  // 👉 O TRADUTOR DE DATAS CONTINUA AQUI PARA A LÓGICA DE SLA E LIMITES
   DateTime? _safeDate(dynamic value) {
     if (value == null) return null;
     
@@ -85,12 +85,11 @@ class _CorridasTabState extends State<CorridasTab> with SingleTickerProviderStat
     return null;
   }
 
-  // 👉 A FUNÇÃO DE FINALIZAR FOI ATUALIZADA PARA O "COMBO" DE DATAS
   Future<void> _finalizarEntrega(String pedidoId) async {
     HapticFeedback.heavyImpact();
     try {
       await FirebaseFirestore.instance.collection('pedidos').doc(pedidoId).update({
-        'status': 'concluido', // Tudo minúsculo pro React entender
+        'status': 'concluido', 
         'data_entrega': FieldValue.serverTimestamp(),
         'data_conclusao': FieldValue.serverTimestamp(),
         'timestamp': FieldValue.serverTimestamp(),
@@ -259,10 +258,41 @@ class _CorridasTabState extends State<CorridasTab> with SingleTickerProviderStat
     if (mounted) Navigator.pop(context);
   }
 
+  // 👉 NOVA FUNÇÃO AUXILIAR: Extrai o endereço de forma consistente para poder usar na rota múltipla.
+  String _extrairEndereco(Map<String, dynamic> data) {
+    String enderecoText = 'Endereço não informado';
+    if (data['endereco'] is String) {
+      enderecoText = data['endereco'];
+    } else if (data['endereco'] is Map) {
+      final map = data['endereco'] as Map<String, dynamic>;
+      final rua = map['rua'] ?? map['logradouro'] ?? '';
+      final numero = map['numero'] ?? '';
+      final bairro = map['bairro'] ?? '';
+      final cidade = map['cidade'] ?? 'Belo Horizonte'; 
+      
+      enderecoText = '$rua, $numero';
+      if (bairro.isNotEmpty) enderecoText += ' - $bairro';
+      enderecoText += ', $cidade'; 
+      enderecoText = enderecoText.replaceAll(RegExp(r'^, | - $'), '').trim();
+      if (enderecoText.isEmpty || enderecoText == ',') enderecoText = 'Endereço na nuvem';
+    }
+    return enderecoText;
+  }
+
   @override
   Widget build(BuildContext context) {
     final isDark = MediaQuery.of(context).platformBrightness == Brightness.dark;
     final textColor = isDark ? Colors.white : const Color(0xFF0F172A);
+
+    // 👉 A MÁGICA DO FILTRO DO SERVIDOR ACONTECE AQUI
+    final agora = DateTime.now();
+    final inicioDoDia = DateTime(agora.year, agora.month, agora.day);
+
+    final query = FirebaseFirestore.instance
+        .collection('pedidos')
+        .where('entregador', isEqualTo: widget.entregadorName)
+        // Busca APENAS os escaneados de hoje em diante. Adeus conta cara do Firebase!
+        .where('timestamp_atribuicao', isGreaterThanOrEqualTo: Timestamp.fromDate(inicioDoDia));
 
     return Scaffold(
       backgroundColor: Colors.transparent, 
@@ -300,231 +330,200 @@ class _CorridasTabState extends State<CorridasTab> with SingleTickerProviderStat
           ),
         ),
       ),
-      body: TabBarView(
-        controller: _tabController,
-        physics: const BouncingScrollPhysics(),
-        children: [
-          _buildListaCorridas(isDark, isConcluida: false),
-          _buildListaCorridas(isDark, isConcluida: true),
-        ],
+      // 👉 STREAMBUILDER GLOBAL: Acabou a lentidão na transição das abas!
+      body: StreamBuilder<QuerySnapshot>(
+        stream: query.snapshots(),
+        builder: (context, snapshot) {
+          if (snapshot.hasError) return Center(child: Text('Erro de conexão.', style: TextStyle(color: isDark ? Colors.white : Colors.black, fontWeight: FontWeight.bold)));
+          if (snapshot.connectionState == ConnectionState.waiting) return const Center(child: CircularProgressIndicator(color: Color(0xFFF28C38)));
+
+          List<QueryDocumentSnapshot> emAndamento = [];
+          List<QueryDocumentSnapshot> concluidas = [];
+
+          // Separa as listas na memória uma única vez
+          for (var doc in snapshot.data!.docs) {
+            final data = doc.data() as Map<String, dynamic>;
+            final status = data['status']?.toString().toLowerCase() ?? '';
+            
+            bool isDone = status.contains('conclu') || status.contains('entregue');
+            bool isCancel = status.contains('cancel');
+
+            if (isDone) {
+              concluidas.add(doc);
+            } else if (!isCancel) {
+              emAndamento.add(doc);
+            }
+          }
+
+          // Ordena as corridas em andamento pela hora de criação/atribuição
+          emAndamento.sort((a, b) {
+            final tA = (a.data() as Map<String, dynamic>)['timestamp'];
+            final tB = (b.data() as Map<String, dynamic>)['timestamp'];
+            if (tA == null || tB == null) return 0;
+            return tA.toString().compareTo(tB.toString());
+          });
+
+          // Distribui as listas prontas para as abas (agora a troca é instantânea)
+          return TabBarView(
+            controller: _tabController,
+            physics: const BouncingScrollPhysics(),
+            children: [
+              _buildListaOtimizada(emAndamento, isDark, isConcluida: false),
+              _buildListaOtimizada(concluidas, isDark, isConcluida: true),
+            ],
+          );
+        },
       ),
     );
   }
 
-  Widget _buildListaCorridas(bool isDark, {required bool isConcluida}) {
-    final query = FirebaseFirestore.instance
-        .collection('pedidos')
-        .where('entregador', isEqualTo: widget.entregadorName);
+  Widget _buildListaOtimizada(List<QueryDocumentSnapshot> corridas, bool isDark, {required bool isConcluida}) {
+    if (corridas.isEmpty) return _buildEmptyState(isDark, isConcluida);
 
-    return StreamBuilder<QuerySnapshot>(
-      stream: query.snapshots(),
-      builder: (context, snapshot) {
-        if (snapshot.hasError) return Center(child: Text('Erro de conexão.', style: TextStyle(color: isDark ? Colors.white : Colors.black, fontWeight: FontWeight.bold)));
-        if (snapshot.connectionState == ConnectionState.waiting) return const Center(child: CircularProgressIndicator(color: Color(0xFFF28C38)));
+    // Preenche a lista de endereços primeiro (Corrigindo o bug da rota múltipla!)
+    List<String> todosEnderecos = [];
+    if (!isConcluida) {
+      todosEnderecos = corridas.map((doc) => _extrairEndereco(doc.data() as Map<String, dynamic>)).toList();
+    }
 
-        final hoje = DateTime(DateTime.now().year, DateTime.now().month, DateTime.now().day);
-
-        final corridas = snapshot.data!.docs.where((doc) {
-          final data = doc.data() as Map<String, dynamic>;
-          final status = data['status']?.toString().toLowerCase() ?? '';
-          
-          if (isConcluida) {
-            bool isDone = status.contains('conclu') || status.contains('entregue');
-            if (!isDone) return false;
-
-            // 👉 A MÁGICA ENTRA AQUI: Agendamento tem prioridade absoluta!
-            DateTime? dataPedido;
-            
-            if (data['agendamento'] is Map && data['agendamento']['is_agendado'] == true) {
-              dataPedido = _safeDate(data['agendamento']['data']);
-            }
-            
-            // Fallback para as datas da conclusão da central ou da entrega final
-            dataPedido ??= _safeDate(data['data_entrega']) ?? _safeDate(data['data_conclusao']) ?? _safeDate(data['timestamp']) ?? _safeDate(data['created_at']);
-            
-            if (dataPedido != null) {
-               return dataPedido.isAfter(hoje.subtract(const Duration(seconds: 1)));
-            }
-            return false;
-          } else {
- 
-            bool isDone = status.contains('conclu') || status.contains('entregue') || status.contains('cancel');
-            return !isDone; 
-          }
-        }).toList();
-
-        if (corridas.isEmpty) return _buildEmptyState(isDark, isConcluida);
-
-        if (!isConcluida) {
-          corridas.sort((a, b) {
-             final tA = (a.data() as Map<String, dynamic>)['timestamp'];
-             final tB = (b.data() as Map<String, dynamic>)['timestamp'];
-             if (tA == null || tB == null) return 0;
-             return tA.toString().compareTo(tB.toString());
-          });
-        }
-
-        List<String> todosEnderecos = [];
-
-        return Column(
-          children: [
-            // BANNER DE OTIMIZAÇÃO DE ROTA
-            if (!isConcluida && corridas.length >= 2)
-              Container(
-                margin: const EdgeInsets.fromLTRB(24, 16, 24, 8),
-                decoration: BoxDecoration(
-                  color: isDark ? const Color(0xFF1A1D24) : Colors.white,
-                  borderRadius: BorderRadius.circular(24),
-                  boxShadow: [BoxShadow(color: const Color(0xFF0F172A).withOpacity(0.03), blurRadius: 20, offset: const Offset(0, 8))],
-                ),
-                child: Material(
-                  color: Colors.transparent,
-                  child: InkWell(
-                    borderRadius: BorderRadius.circular(24),
-                    onTap: () => _abrirRotaMultipla(todosEnderecos),
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 20),
-                      child: Row(
-                        children: [
-                          Container(
-                            padding: const EdgeInsets.all(12),
-                            decoration: BoxDecoration(
-                              gradient: const LinearGradient(colors: [Color(0xFFF28C38), Color(0xFFE87A24)], begin: Alignment.topLeft, end: Alignment.bottomRight),
-                              borderRadius: BorderRadius.circular(16),
-                              boxShadow: [BoxShadow(color: const Color(0xFFF28C38).withOpacity(0.3), blurRadius: 8, offset: const Offset(0, 4))],
-                            ),
-                            child: const Icon(Icons.route_rounded, color: Colors.white, size: 20),
-                          ),
-                          const SizedBox(width: 16),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text('Rotas Otimizadas', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 16, color: isDark ? Colors.white : const Color(0xFF0F172A))),
-                                Text('${corridas.length} entregas agrupadas', style: TextStyle(fontSize: 13, color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B), fontWeight: FontWeight.w500)),
-                              ],
-                            ),
-                          ),
-                          Icon(Icons.arrow_forward_ios_rounded, size: 16, color: isDark ? const Color(0xFF64748B) : const Color(0xFFCBD5E1)),
-                        ],
+    return Column(
+      children: [
+        // BANNER DE OTIMIZAÇÃO DE ROTA
+        if (!isConcluida && corridas.length >= 2)
+          Container(
+            margin: const EdgeInsets.fromLTRB(24, 16, 24, 8),
+            decoration: BoxDecoration(
+              color: isDark ? const Color(0xFF1A1D24) : Colors.white,
+              borderRadius: BorderRadius.circular(24),
+              boxShadow: [BoxShadow(color: const Color(0xFF0F172A).withOpacity(0.03), blurRadius: 20, offset: const Offset(0, 8))],
+            ),
+            child: Material(
+              color: Colors.transparent,
+              child: InkWell(
+                borderRadius: BorderRadius.circular(24),
+                onTap: () => _abrirRotaMultipla(todosEnderecos),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 20),
+                  child: Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          gradient: const LinearGradient(colors: [Color(0xFFF28C38), Color(0xFFE87A24)], begin: Alignment.topLeft, end: Alignment.bottomRight),
+                          borderRadius: BorderRadius.circular(16),
+                          boxShadow: [BoxShadow(color: const Color(0xFFF28C38).withOpacity(0.3), blurRadius: 8, offset: const Offset(0, 4))],
+                        ),
+                        child: const Icon(Icons.route_rounded, color: Colors.white, size: 20),
                       ),
-                    ),
+                      const SizedBox(width: 16),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text('Rotas Otimizadas', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 16, color: isDark ? Colors.white : const Color(0xFF0F172A))),
+                            Text('${corridas.length} entregas agrupadas', style: TextStyle(fontSize: 13, color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B), fontWeight: FontWeight.w500)),
+                          ],
+                        ),
+                      ),
+                      Icon(Icons.arrow_forward_ios_rounded, size: 16, color: isDark ? const Color(0xFF64748B) : const Color(0xFFCBD5E1)),
+                    ],
                   ),
                 ),
               ),
-
-            // A LISTA DE CARDS
-            Expanded(
-              child: ListView.builder(
-                padding: const EdgeInsets.only(left: 24, right: 24, top: 8, bottom: 120), 
-                physics: const BouncingScrollPhysics(),
-                itemCount: corridas.length,
-                itemBuilder: (context, index) {
-                  final doc = corridas[index];
-                  final data = doc.data() as Map<String, dynamic>;
-                  final id = doc.id;
-
-                  String enderecoText = 'Endereço não informado';
-                  if (data['endereco'] is String) {
-                    enderecoText = data['endereco'];
-                  } else if (data['endereco'] is Map) {
-                    final map = data['endereco'] as Map<String, dynamic>;
-                    final rua = map['rua'] ?? map['logradouro'] ?? '';
-                    final numero = map['numero'] ?? '';
-                    final bairro = map['bairro'] ?? '';
-                    final cidade = map['cidade'] ?? 'Belo Horizonte'; 
-                    
-                    enderecoText = '$rua, $numero';
-                    if (bairro.isNotEmpty) enderecoText += ' - $bairro';
-                    enderecoText += ', $cidade'; 
-                    enderecoText = enderecoText.replaceAll(RegExp(r'^, | - $'), '').trim();
-                    if (enderecoText.isEmpty || enderecoText == ',') enderecoText = 'Endereço na nuvem';
-                  }
-
-                  if (!isConcluida) todosEnderecos.add(enderecoText);
-
-                  String clienteText = 'Cliente Ao Gosto';
-                  String telefoneText = '';
-                  
-                  if (data['cliente'] is String) {
-                    clienteText = data['cliente'];
-                  } else if (data['nome_cliente'] is String) {
-                    clienteText = data['nome_cliente'];
-                  } else if (data['cliente'] is Map) {
-                    final map = data['cliente'] as Map<String, dynamic>;
-                    clienteText = map['nome'] ?? 'Cliente Ao Gosto';
-                    telefoneText = map['telefone'] ?? map['celular'] ?? '';
-                  }
-                  if (telefoneText.isEmpty) telefoneText = data['telefone'] ?? '';
-
-                  // 👉 EXTRAÇÃO DO DEADLINE INTELIGENTE (Agendado vs Imediato)
-                  DateTime? limiteEntrega;
-                  bool isAgendado = false;
-                  String janelaTexto = '';
-
-                  if (data['agendamento'] is Map && (data['agendamento']['is_agendado'] == true || data['agendamento']['janela_texto'] != null)) {
-                    isAgendado = true;
-                    janelaTexto = data['agendamento']['janela_texto']?.toString() ?? '';
-                    
-                    DateTime? dataBaseAgendamento;
-                    if (data['agendamento']['data'] != null) {
-                       final agenData = data['agendamento']['data'];
-                       dataBaseAgendamento = agenData is Timestamp ? agenData.toDate() : DateTime.tryParse(agenData.toString());
-                    }
-                    
-                    if (dataBaseAgendamento != null && janelaTexto.contains('-')) {
-                      // Extrai o limite máximo da janela de entrega (Ex: 12:00 - 15:00 -> pega o 15:00)
-                      try {
-                          final horaFimStr = janelaTexto.split('-').last.trim(); 
-                          final horaMinuto = horaFimStr.split(':');
-                          final hora = int.parse(horaMinuto[0]);
-                          final minuto = int.parse(horaMinuto[1]);
-                          
-                          limiteEntrega = DateTime(dataBaseAgendamento.year, dataBaseAgendamento.month, dataBaseAgendamento.day, hora, minuto);
-                      } catch (_) {
-                          limiteEntrega = dataBaseAgendamento; 
-                      }
-                    } else {
-                      limiteEntrega = dataBaseAgendamento;
-                    }
-                  } 
-                  
-                  // Se for Imediato (Pra Agora)
-                  if (!isAgendado) {
-                    DateTime? criacao;
-                    if (data['timestamp'] != null) {
-                      criacao = data['timestamp'] is Timestamp ? (data['timestamp'] as Timestamp).toDate() : DateTime.tryParse(data['timestamp'].toString());
-                    } else if (data['created_at'] != null) {
-                      criacao = data['created_at'] is Timestamp ? (data['created_at'] as Timestamp).toDate() : DateTime.tryParse(data['created_at'].toString());
-                    }
-                    
-                    // O limite da corrida imediata é 1 hora após a aprovação
-                    if (criacao != null) {
-                        limiteEntrega = criacao.add(const Duration(hours: 1)); 
-                    }
-                  }
-
-                  // 👉 O DETECTOR DE CARVÃO
-                  int quantidadeCarvao = 0;
-                  if (data['itens'] is List) {
-                    final itens = data['itens'] as List<dynamic>;
-                    for (var item in itens) {
-                      if (item is Map) {
-                        final nomeItem = item['nome']?.toString().toLowerCase() ?? '';
-                        if (nomeItem.contains('carvao') || nomeItem.contains('carvão')) {
-                          quantidadeCarvao += (item['quantidade'] as num?)?.toInt() ?? 1;
-                        }
-                      }
-                    }
-                  }
-                  
-                  return _buildCorridaCard(id, clienteText, enderecoText, telefoneText, limiteEntrega, isConcluida, quantidadeCarvao, isDark);
-                },
-              ),
             ),
-          ],
-        );
-      },
+          ),
+
+        // A LISTA DE CARDS
+        Expanded(
+          child: ListView.builder(
+            padding: const EdgeInsets.only(left: 24, right: 24, top: 8, bottom: 120), 
+            physics: const BouncingScrollPhysics(),
+            itemCount: corridas.length,
+            itemBuilder: (context, index) {
+              final doc = corridas[index];
+              final data = doc.data() as Map<String, dynamic>;
+              final id = doc.id;
+
+              String enderecoText = _extrairEndereco(data);
+
+              String clienteText = 'Cliente Ao Gosto';
+              String telefoneText = '';
+              
+              if (data['cliente'] is String) {
+                clienteText = data['cliente'];
+              } else if (data['nome_cliente'] is String) {
+                clienteText = data['nome_cliente'];
+              } else if (data['cliente'] is Map) {
+                final map = data['cliente'] as Map<String, dynamic>;
+                clienteText = map['nome'] ?? 'Cliente Ao Gosto';
+                telefoneText = map['telefone'] ?? map['celular'] ?? '';
+              }
+              if (telefoneText.isEmpty) telefoneText = data['telefone'] ?? '';
+
+              // 👉 EXTRAÇÃO DO DEADLINE INTELIGENTE (Agendado vs Imediato)
+              DateTime? limiteEntrega;
+              bool isAgendado = false;
+              String janelaTexto = '';
+
+              if (data['agendamento'] is Map && (data['agendamento']['is_agendado'] == true || data['agendamento']['janela_texto'] != null)) {
+                isAgendado = true;
+                janelaTexto = data['agendamento']['janela_texto']?.toString() ?? '';
+                
+                DateTime? dataBaseAgendamento;
+                if (data['agendamento']['data'] != null) {
+                   final agenData = data['agendamento']['data'];
+                   dataBaseAgendamento = agenData is Timestamp ? agenData.toDate() : DateTime.tryParse(agenData.toString());
+                }
+                
+                if (dataBaseAgendamento != null && janelaTexto.contains('-')) {
+                  try {
+                      final horaFimStr = janelaTexto.split('-').last.trim(); 
+                      final horaMinuto = horaFimStr.split(':');
+                      final hora = int.parse(horaMinuto[0]);
+                      final minuto = int.parse(horaMinuto[1]);
+                      
+                      limiteEntrega = DateTime(dataBaseAgendamento.year, dataBaseAgendamento.month, dataBaseAgendamento.day, hora, minuto);
+                  } catch (_) {
+                      limiteEntrega = dataBaseAgendamento; 
+                  }
+                } else {
+                  limiteEntrega = dataBaseAgendamento;
+                }
+              } 
+              
+              // Se for Imediato (Pra Agora)
+              if (!isAgendado) {
+                DateTime? criacao;
+                if (data['timestamp'] != null) {
+                  criacao = data['timestamp'] is Timestamp ? (data['timestamp'] as Timestamp).toDate() : DateTime.tryParse(data['timestamp'].toString());
+                } else if (data['created_at'] != null) {
+                  criacao = data['created_at'] is Timestamp ? (data['created_at'] as Timestamp).toDate() : DateTime.tryParse(data['created_at'].toString());
+                }
+                
+                if (criacao != null) {
+                    limiteEntrega = criacao.add(const Duration(hours: 1)); 
+                }
+              }
+
+              // 👉 O DETECTOR DE CARVÃO
+              int quantidadeCarvao = 0;
+              if (data['itens'] is List) {
+                final itens = data['itens'] as List<dynamic>;
+                for (var item in itens) {
+                  if (item is Map) {
+                    final nomeItem = item['nome']?.toString().toLowerCase() ?? '';
+                    if (nomeItem.contains('carvao') || nomeItem.contains('carvão')) {
+                      quantidadeCarvao += (item['quantidade'] as num?)?.toInt() ?? 1;
+                    }
+                  }
+                }
+              }
+              
+              return _buildCorridaCard(id, clienteText, enderecoText, telefoneText, limiteEntrega, isConcluida, quantidadeCarvao, isDark);
+            },
+          ),
+        ),
+      ],
     );
   }
 
@@ -533,7 +532,7 @@ class _CorridasTabState extends State<CorridasTab> with SingleTickerProviderStat
     Color slaBgColor = Colors.transparent;
     String slaText = '';
     
-    // 👉 CRONÔMETRO DE SLA (Versão Logística Big Tech)
+    // 👉 CRONÔMETRO DE SLA
     if (!isConcluida && limiteEntrega != null) {
       final agora = DateTime.now();
       
@@ -586,14 +585,13 @@ class _CorridasTabState extends State<CorridasTab> with SingleTickerProviderStat
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // 👉 CABEÇALHO DO CARD (Blindado contra Overflows)
+          // 👉 CABEÇALHO DO CARD
           Padding(
             padding: const EdgeInsets.fromLTRB(24, 24, 24, 12),
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              crossAxisAlignment: CrossAxisAlignment.start, // Mantém tudo alinhado ao topo
+              crossAxisAlignment: CrossAxisAlignment.start, 
               children: [
-                // ESQUERDA: ID + SLA (Envolvidos em Expanded para ceder espaço se precisar)
                 Expanded(
                   child: Row(
                     children: [
@@ -610,13 +608,12 @@ class _CorridasTabState extends State<CorridasTab> with SingleTickerProviderStat
                       ),
                       if (hasSlaAlert) ...[
                         const SizedBox(width: 8),
-                        // FLEXIBLE: Permite que o alerta diminua e use "..." se o texto for gigante
                         Flexible(
                           child: Container(
                             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                             decoration: BoxDecoration(color: slaBgColor, borderRadius: BorderRadius.circular(10)),
                             child: Row(
-                              mainAxisSize: MainAxisSize.min, // Não ocupa espaço à toa
+                              mainAxisSize: MainAxisSize.min, 
                               children: [
                                 Icon(Icons.timer_rounded, size: 14, color: slaColor),
                                 const SizedBox(width: 4),
@@ -624,7 +621,7 @@ class _CorridasTabState extends State<CorridasTab> with SingleTickerProviderStat
                                   child: Text(
                                     slaText, 
                                     style: TextStyle(color: slaColor, fontWeight: FontWeight.w800, fontSize: 12),
-                                    overflow: TextOverflow.ellipsis, // A MÁGICA CONTRA O OVERFLOW
+                                    overflow: TextOverflow.ellipsis, 
                                   ),
                                 ),
                               ],
@@ -636,9 +633,8 @@ class _CorridasTabState extends State<CorridasTab> with SingleTickerProviderStat
                   ),
                 ),
                 
-                const SizedBox(width: 12), // Respiro entre a esquerda e a direita
+                const SizedBox(width: 12), 
                 
-                // DIREITA: ALERTA DE CARVÃO (Sempre visível e protegido)
                 if (quantidadeCarvao > 0 && !isConcluida)
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
@@ -775,7 +771,7 @@ class _CorridasTabState extends State<CorridasTab> with SingleTickerProviderStat
           const SizedBox(height: 12),
           Text(
             isConcluida ? 'As entregas do dia aparecerão aqui.' : 'Aguardando novas chamadas.', 
-            style: TextStyle(fontSize: 16, color: const Color(0xFF64748B), fontWeight: FontWeight.w500)
+            style: const TextStyle(fontSize: 16, color: Color(0xFF64748B), fontWeight: FontWeight.w500)
           ),
         ],
       ),

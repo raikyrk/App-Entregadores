@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:permission_handler/permission_handler.dart'; // Import mantido!
 
 class LocationService {
   static bool isTracking = false;
@@ -14,7 +15,8 @@ class LocationService {
   static Position? _lastPosition; 
   static Position? _lastSavedPosition; 
 
-  static Future<bool> startTracking() async {
+  // 👉 ATENÇÃO: Passando o BuildContext aqui (igual arrumamos no Dashboard)
+  static Future<bool> startTracking(BuildContext context) async {
     if (isTracking) return true;
 
     // 1. O GPS físico do celular está ligado?
@@ -35,6 +37,32 @@ class LocationService {
       return false; 
     }
 
+    // 👉 3. A MÁGICA EM AÇÃO: Pedindo as permissões vitais para o Android 13+
+    if (defaultTargetPlatform == TargetPlatform.android) {
+      
+      // Pede para mostrar a notificação (Evita o crash silencioso)
+      if (await Permission.notification.isDenied) {
+        await Permission.notification.request();
+      }
+
+      // Pede para o Android NÃO matar o app por bateria
+      if (await Permission.ignoreBatteryOptimizations.isDenied) {
+        var status = await Permission.ignoreBatteryOptimizations.request();
+        
+        // Se o usuário negar, mostra aquele nosso alerta educacional
+        if (!status.isGranted && context.mounted) {
+          final prefs = await SharedPreferences.getInstance();
+          bool jaMostrouAviso = prefs.getBool('aviso_bateria_mostrado') ?? false;
+
+          if (!jaMostrouAviso) {
+            await prefs.setBool('aviso_bateria_mostrado', true);
+            _mostrarAvisoBateriaManual(context);
+          }
+        }
+      }
+    }
+
+    // Restante do seu código original...
     final prefs = await SharedPreferences.getInstance();
     final entregadorNome = prefs.getString('entregador'); 
     
@@ -65,17 +93,17 @@ class LocationService {
       debugPrint('Aviso: GPS não respondeu de imediato.');
     }
 
-    // 3. Configuração do Foreground Service (Para não morrer no bolso)
+    // 4. Configuração do Foreground Service (Para não morrer no bolso)
     late LocationSettings locationSettings;
     if (defaultTargetPlatform == TargetPlatform.android) {
       locationSettings = AndroidSettings(
         accuracy: LocationAccuracy.high,
-        distanceFilter: 5, // 👉 AJUSTADO PARA 5 METROS!
+        distanceFilter: 5, 
         forceLocationManager: true,
         intervalDuration: const Duration(seconds: 10),
         foregroundNotificationConfig: const ForegroundNotificationConfig(
           notificationText: "Buscando rotas e enviando localização para a central...",
-          notificationTitle: "Ao Gosto: Você está On-line",
+          notificationTitle: "Go! Entregas: Você está On-line",
           enableWakeLock: true,
         ),
       );
@@ -83,25 +111,24 @@ class LocationService {
       locationSettings = AppleSettings(
         accuracy: LocationAccuracy.high,
         activityType: ActivityType.automotiveNavigation,
-        distanceFilter: 5, // 👉 AJUSTADO PARA 5 METROS!
+        distanceFilter: 5, 
         pauseLocationUpdatesAutomatically: false,
         showBackgroundLocationIndicator: true, 
       );
     } else {
-      locationSettings = const LocationSettings(accuracy: LocationAccuracy.high, distanceFilter: 5); // 👉 AJUSTADO PARA 5 METROS!
+      locationSettings = const LocationSettings(accuracy: LocationAccuracy.high, distanceFilter: 5); 
     }
 
-    // 4. O Listener que salva as coordenadas no Firestore (Sem Timer)
+    // 5. O Listener que salva as coordenadas no Firestore
     _positionStream = Geolocator.getPositionStream(locationSettings: locationSettings).listen((Position position) async {
       _lastPosition = position; 
 
-      // 👉 TRAVA DE SEGURANÇA MANTIDA: Filtro salvador de dinheiro (5 metros)
       if (_lastSavedPosition != null) {
         double distance = Geolocator.distanceBetween(
             _lastSavedPosition!.latitude, _lastSavedPosition!.longitude,
             position.latitude, position.longitude);
         
-        if (distance < 5.0) return; // Sai fora e economiza o Write!
+        if (distance < 5.0) return; 
       }
 
       try {
@@ -151,5 +178,30 @@ class LocationService {
     } catch (e) {
       debugPrint('Erro ao sair do radar no Firebase: $e');
     }
+  }
+
+  // Alerta extra caso ele recuse a permissão automática
+  static void _mostrarAvisoBateriaManual(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          title: const Text("Atenção, Entregador!"),
+          content: const Text(
+            "Para o GPS não desligar quando você colocar o celular no bolso, você precisa tirar a restrição de bateria do nosso aplicativo.\n\n"
+            "Na próxima tela, vá em 'Bateria' e escolha 'Não Restrito' (ou 'Sem Restrição')."
+          ),
+          actions: [
+            TextButton(
+              onPressed: () {
+                Navigator.pop(context);
+                openAppSettings(); 
+              },
+              child: const Text("Entendi, vamos lá!"),
+            ),
+          ],
+        );
+      },
+    );
   }
 }
